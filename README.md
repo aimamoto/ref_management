@@ -102,8 +102,9 @@ python scan_raw_refs.py "Manuscript.docx"
 
 ---
 
-## 📝 License
+## ⚖️ License & Data Usage
 
-This project is open-source. Feel free to modify and distribute.
+**Code License:** [MIT License](LICENSE)
 
-*Disclaimer: While this tool uses fuzzy logic and official APIs (PubMed/Crossref) to verify data, always manually review the final bibliography before submission.*
+**Data Usage:**
+This tool interacts with the [NCBI Entrez API](https://www.ncbi.nlm.nih.gov/home/about/policies/) (PubMed) and the [Crossref API](https://www.crossref.org/documentation/retrieve-metadata/). Users are responsible for adhering to the Terms of Service of these providers, particularly regarding rate limits and bulk data usage.
