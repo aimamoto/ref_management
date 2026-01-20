@@ -102,35 +102,6 @@ python scan_raw_refs.py "Manuscript.docx"
 
 ---
 
-## 🗂️ Managing Files via GitHub Website
-
-If you need to delete or modify files in this repository using the GitHub web interface (without using Git locally), follow these steps:
-
-### How to Delete a File (e.g., `placeholder.txt` in the scripts folder)
-
-1. **Navigate to the File:**
-   - Go to the repository on GitHub: `https://github.com/aimamoto/ref_management`
-   - Click on the `scripts` folder
-   - Click on the file you want to delete (e.g., `placeholder.txt`)
-
-2. **Delete the File:**
-   - Click the **trash can icon** (🗑️) in the top-right corner of the file view
-   - This will open a commit interface
-
-3. **Commit the Deletion:**
-   - Add a commit message describing the change (e.g., "Remove placeholder.txt")
-   - Optionally, add an extended description
-   - Choose to commit directly to the main branch or create a new branch for a pull request
-   - Click **Commit changes**
-
-### Other File Operations via GitHub Website
-
-- **Edit a File:** Click the pencil icon (✏️) when viewing the file
-- **Upload Files:** Click "Add file" → "Upload files" in the repository or folder view
-- **Create New File:** Click "Add file" → "Create new file" in the repository or folder view
-
----
-
 ## ⚖️ License & Data Usage
 
 **Code License:** [MIT License](LICENSE)
