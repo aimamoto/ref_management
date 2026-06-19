@@ -1,10 +1,3 @@
-You are absolutely right. To make it a single, uninterrupted text block that you
-can copy with one click, I have wrapped the entire Markdown file inside a raw
-text block.
-
-You can just click "Copy code" in the top right corner of the box below and
-paste it straight into Gedit!
-
 # AI Manuscript Reference Toolkit (Revision 2)
 
 ![Python Version](https://img.shields.io/badge/python-3.x-blue) ![License](https://img.shields.io/badge/license-MIT-green)
