@@ -122,5 +122,20 @@ python generate_report_r2.py "MyDraft_extracted_verified.bib"
 
 ---
 
+## 🛠️ Troubleshooting
+
+### "Dependent" CSL Style Error
+If the script aborts with an error stating that your `.csl` file is a **dependent style**, it means the file you downloaded from Zotero doesn't contain actual formatting rules. Instead, it is a lightweight link that points to a "parent" style used by the publisher. 
+
+**Solution:**
+1. Look at the error message in your terminal—the script will automatically extract and print the exact URL and name of the required parent style.
+2. Download that parent `.csl` file from the Zotero repository and place it in your `~/citation_styles/` folder.
+3. Rerun the script using the parent style.
+
+*Example:* If you download the style for *Nature Genetics*, the script will flag it as dependent and instruct you to download `nature.csl`. You will then simply run:
+`python auto_format_manuscript.py "MyDraft.docx" --csl nature`
+
+---
+
 ## 📝 Disclaimer
 *While this toolkit uses fuzzy logic, NLP shields, and official APIs to verify and map data, always perform a final visual review of the generated manuscript before submitting to a journal.*
