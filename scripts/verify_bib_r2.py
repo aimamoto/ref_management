@@ -19,7 +19,7 @@ from Bio import Entrez
 from rapidfuzz import fuzz
 
 # --- CONFIGURATION ---
-Entrez.email = os.environ.get("NCBI_EMAIL", "aimamoto@uchicago.edu")
+Entrez.email = os.environ.get("NCBI_EMAIL", None)
 Entrez.api_key = os.environ.get("NCBI_API_KEY", None)
 
 if Entrez.api_key is None:
