@@ -19,7 +19,7 @@ from Bio import Entrez
 from rapidfuzz import fuzz
 
 # --- CONFIGURATION ---
-Entrez.email = os.environ.get("NCBI_EMAIL", None)
+Entrez.email = os.environ.get("NCBI_EMAIL", "aimamoto@uchicago.edu")
 Entrez.api_key = os.environ.get("NCBI_API_KEY", None)
 
 if Entrez.api_key is None:
@@ -237,6 +237,41 @@ class BibTexEnhancer:
             else:
                 self.stats['failed'] += 1
                 print(" -> [NO MATCH]")
+
+        # =====================================================================
+        # --- NEW: Post-Processor for Modern Online/MDPI Journals ---
+        print("\nEnrichment complete. Finalizing formatting...")
+        for entry in bib_database.entries:
+            pages_val = entry.get('pages', '').replace('{', '').replace('}', '').strip()
+            if not pages_val:
+                num_val = entry.get('number', '').replace('{', '').replace('}', '').strip()
+                final_page = None
+                
+                # If the issue number is abnormally large, it's actually the article number
+                if num_val.isdigit() and int(num_val) > 100:
+                    final_page = num_val
+                elif entry.get('doi'):
+                    # Isolate trailing numbers from the DOI algebraically
+                    match = re.search(r'(\d+)[a-zA-Z-]*$', entry['doi'].strip())
+                    if match:
+                        digits = match.group(1)
+                        vol = entry.get('volume', '').replace('{', '').replace('}', '').strip()
+                        iss = num_val
+                        if vol and digits.startswith(vol):
+                            rem = digits[len(vol):]
+                            if iss and rem.startswith(iss.zfill(2)):
+                                rem = rem[len(iss.zfill(2)):]
+                            elif iss and rem.startswith(iss):
+                                rem = rem[len(iss):]
+                            digits = rem if rem else digits
+                        final_page = digits.lstrip('0') or digits
+                
+                # Forcefully populate all CSL variants of "page" so the engine cannot ignore it
+                if final_page:
+                    entry['pages'] = final_page
+                    entry['eid'] = final_page
+                    entry['article-number'] = final_page
+        # =====================================================================
 
         print("\n" + "=" * 50)
         writer = BibTexWriter()
