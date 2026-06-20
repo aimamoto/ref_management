@@ -1,9 +1,15 @@
 import sys
+import os
 import re
 import argparse
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple, Match
 import html
+import warnings
+import tempfile
+from pathlib import Path
+from typing import Dict, List, Optional, Match
+
+# --- Suppress harmless citeproc-py schema validation warnings ---
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # --- MONKEY PATCH FOR PYPARSING/BIBTEXPARSER COMPATIBILITY ---
 import pyparsing
@@ -11,11 +17,14 @@ if not hasattr(pyparsing, 'DelimitedList'):
     if hasattr(pyparsing, 'delimited_list'): setattr(pyparsing, 'DelimitedList', pyparsing.delimited_list)
     elif hasattr(pyparsing, 'delimitedList'): setattr(pyparsing, 'DelimitedList', pyparsing.delimitedList)
 
+import bibtexparser
+from bibtexparser.bwriter import BibTexWriter
 from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.table import Table
 from docx.oxml.text.paragraph import CT_P
 from docx.oxml.table import CT_Tbl
+from rapidfuzz import fuzz
 
 # --- CITEPROC IMPORTS ---
 from citeproc import CitationStylesStyle, CitationStylesBibliography
@@ -23,7 +32,7 @@ from citeproc import Citation, CitationItem
 from citeproc import formatter
 from citeproc.source.bibtex import BibTeX
 
-# --- INTELLIGENCE DICTIONARIES (SMART SHIELDS PRESERVED) ---
+# --- INTELLIGENCE DICTIONARIES ---
 AA_LIST_3 = "Ala|Arg|Asn|Asp|Cys|Gln|Glu|Gly|His|Ile|Leu|Lys|Met|Phe|Pro|Ser|Thr|Trp|Tyr|Val"
 AA_PATTERN_3 = re.compile(rf'\b(?:{AA_LIST_3})\s*-?\s*$', re.IGNORECASE)
 AA_PATTERN_1 = re.compile(r'\b[ARNDCQEGHILKMFPSTWY]-?$')
@@ -36,93 +45,107 @@ PROSE_STOP_WORDS = {'the', 'is', 'are', 'was', 'were', 'that', 'this', 'to', 'fo
                     'in', 'on', 'by', 'an', 'we', 'our', 'as', 'it', 'can', 'be', 'has', 'have', 'of', 'and', 'from', 'which'}
 
 REF_HEADER_PATTERN = re.compile(r'^\s*(?:[0-9]+\.?\s*)?(?:REFERENCES|BIBLIOGRAPHY|LITERATURE CITED|WORKS CITED)\s*$', re.IGNORECASE)
-
-# --- NEW: Catch sections that typically come AFTER references ---
 POST_REF_PATTERN = re.compile(r'^\s*(?:Tables?|Figures?|Figure Legends?|Supplementary.*?|Appendices|Data Availability|Acknowledgements?|Author Contributions?|Funding|Conflict(?:s)? of Interest|Competing Interests?|(?:Table|Figure|Fig\.?)\s*\d+.*)$', re.IGNORECASE)
 
-# --- CITATION MANAGER CLASS (NOW POWERED BY CSL) ---
+# --- CITATION MANAGER CLASS ---
 class CSLCitationManager:
     def __init__(self, bib_file: Path, csl_file: Path):
         self.bib_file = bib_file
         self.csl_file = csl_file
         self.update_count: int = 0
         
-        # Load CSL Engine
         print(f"Loading Bibliography Data and CSL style ({csl_file.name})...")
-        # Ensure utf-8 encoding is explicitly passed to prevent ascii decode errors
+        
+        # Load the corrected BibTeX directly from the verified file!
         self.bib_source = BibTeX(str(self.bib_file), encoding='utf-8')
         self.bib_style = CitationStylesStyle(str(self.csl_file))
         
-        # --- NEW: Dependent CSL Style Check ---
+        # --- Dependent CSL Style Check ---
         if getattr(self.bib_style.root, 'citation', None) is None:
             parent_link = None
             try:
                 with open(self.csl_file, 'r', encoding='utf-8') as f:
-                    # Search the XML text for the independent parent link
                     match = re.search(r'<link\s+rel="independent-parent"\s+href="([^"]+)"', f.read())
-                    if match:
-                        parent_link = match.group(1)
-            except Exception:
-                pass
+                    if match: parent_link = match.group(1)
+            except Exception: pass
             
             print(f"\n❌ ERROR: '{csl_file.name}' is a 'dependent' CSL style. It does not contain formatting rules.")
             print(f"   citeproc-py requires the full independent parent style to format citations.")
             if parent_link:
-                parent_name = parent_link.split('/')[-1]
-                print(f"   👉 Please download the parent style instead: {parent_name}.csl")
-                print(f"      (Link: {parent_link})")
+                print(f"   👉 Please download the parent style instead: {parent_link.split('/')[-1]}.csl")
             sys.exit(1)
-        # --------------------------------------
-        
+            
         self.bibliography = CitationStylesBibliography(self.bib_style, self.bib_source, formatter.html)
         
-        # Map integer reference numbers to Citeproc IDs (usually the bibtex key)
+        # --- Auto-detect if the CSL file demands superscripts ---
+        self.is_superscript_style = False
+        try:
+            with open(self.csl_file, 'r', encoding='utf-8') as f:
+                csl_text = f.read()
+                # Checks if the style natively asks for superscripts
+                if re.search(r'vertical-align\s*=\s*[\'"]sup[\'"]', csl_text, re.IGNORECASE):
+                    self.is_superscript_style = True
+                # Bulletproof fallback for the major journals
+                elif any(x in str(self.csl_file).lower() for x in ['cell', 'nature', 'lancet', 'science']):
+                    self.is_superscript_style = True
+        except Exception: pass
+
+        # --- Build Indices for Numeric and Author-Year Matching ---
         self.id_map: Dict[int, str] = {}
+        self.ay_map: List[Dict[str, str]] = []
+        
         for key, entry in self.bib_source.items():
             match = re.search(r'(\d+)', key)
             if match:
                 ref_num = int(match.group(1))
                 self.id_map[ref_num] = key
+                
+            authors = entry.get('author', '')
+            year = entry.get('year', '')
+            if authors and year:
+                first_author = authors.split(' and ')[0].split(',')[0].split()[-1].lower()
+                clean_year = re.search(r'((?:19|20)\d{2})', year)
+                if clean_year:
+                    self.ay_map.append({'key': key, 'author': first_author, 'year': clean_year.group(1)})
 
-    def get_in_text_citation(self, oids: List[int]) -> str:
-        """Registers and formats the in-text citation using Citeproc."""
-        valid_keys = [self.id_map[o] for o in oids if o in self.id_map]
-        
-        if not valid_keys:
-            return f"[!!MISSING{oids}!!]"
+    def get_in_text_citation(self, keys: List[str]) -> str:
+        if not keys: return f"[!!MISSING!!]"
 
-        # Create Citation Items and register them with Citeproc
-        citation_items = [CitationItem(key) for key in valid_keys]
+        citation_items = [CitationItem(k) for k in keys]
         citation = Citation(citation_items)
         self.bibliography.register(citation)
         
-        # We output plain text for the in-text citations 
-        formatted_cite = self.bibliography.cite(citation, formatter.plain)
+        formatted_cite = self.bibliography.cite(citation, lambda item: None)
+        formatted_str = html.unescape(str(formatted_cite)).replace('\u200b', '').replace('\u200c', '').strip()
+        clean_text = re.sub(r'<[^>]+>', '', formatted_str).strip()
         
-        # --- NEW: Unescape HTML entities (e.g. &amp; -> &) ---
-        formatted_str = html.unescape(str(formatted_cite))
+        # Ghost-Proof Numeric Extractor
+        nums_raw = re.findall(r'\d+', clean_text)
+        alpha_chars = re.sub(r'[^A-Za-z]', '', clean_text)
+        is_numeric_style = bool(nums_raw) and len(alpha_chars) < 3
         
-        # --- Post-process to fix citeproc-py collapsing limitations ---
-        match = re.match(r'^([\[\(]?)([\d\s,]+)([\]\)]?)$', formatted_str.strip())
-        if match:
-            prefix, numbers_str, suffix = match.groups()
-            nums_raw = [n.strip() for n in numbers_str.split(',')]
-            
-            if all(n.isdigit() for n in nums_raw if n):
-                nums = sorted(list(set(int(n) for n in nums_raw if n)))
-                if nums:
-                    ranges, start, prev = [], nums[0], nums[0]
-                    for n in nums[1:]:
-                        if n == prev + 1:
-                            prev = n
-                        else:
-                            ranges.append(str(start) if prev == start else (f"{start}, {prev}" if prev == start + 1 else f"{start}–{prev}"))
-                            start = prev = n
+        if is_numeric_style:
+            nums = sorted(list(set(int(n) for n in nums_raw)))
+            ranges, start, prev = [], nums[0], nums[0]
+            for n in nums[1:]:
+                if n == prev + 1: prev = n
+                else:
                     ranges.append(str(start) if prev == start else (f"{start}, {prev}" if prev == start + 1 else f"{start}–{prev}"))
-                    
-                    delimiter = ", " if ", " in numbers_str else ","
-                    formatted_str = f"{prefix}{delimiter.join(ranges)}{suffix}"
-
+                    start = prev = n
+            ranges.append(str(start) if prev == start else (f"{start}, {prev}" if prev == start + 1 else f"{start}–{prev}"))
+            
+            collapsed = ", ".join(ranges)
+            
+            if self.is_superscript_style: return f"<sup>{collapsed}</sup>"
+            else:
+                prefix = clean_text[0] if clean_text and clean_text[0] in '[(' else '['
+                suffix = clean_text[-1] if clean_text and clean_text[-1] in '])' else ']'
+                return f"{prefix}{collapsed}{suffix}"
+                
+        if self.is_superscript_style and not ('<sup' in formatted_str.lower()):
+            formatted_str = re.sub(r'^([\[\(]?)(.*?)([\]\)]?)$', r'\2', clean_text)
+            return f"<sup>{formatted_str}</sup>"
+            
         return formatted_str
 
 # --- HELPER & DOCX PROCESSING ---
@@ -132,41 +155,12 @@ def iter_block_items(doc):
         if isinstance(child, CT_P): yield Paragraph(child, doc)
         elif isinstance(child, CT_Tbl): yield Table(child, doc)
 
-def count_bracketed_citations(doc) -> int:
-    count = 0
-    pattern = re.compile(r'[\[\(]([\d\s,\-–]+)[\]\)]')
-    
-    def check_text(text):
-        nonlocal count
-        for match in pattern.finditer(text):
-            raw_inner = match.group(1).replace('–', '-')
-            if match.group(0).startswith('(') and raw_inner.isdigit() and 1900 <= int(raw_inner) <= 2100:
-                continue
-            parts = raw_inner.split(',')
-            valid = True
-            for p in parts:
-                p = p.strip()
-                if '-' in p:
-                    b = p.split('-')
-                    if not (len(b) == 2 and b[0].strip().isdigit() and b[1].strip().isdigit()): valid = False
-                elif not p.isdigit(): valid = False
-            if valid: count += 1
-
-    for block in iter_block_items(doc):
-        if isinstance(block, Paragraph): check_text(block.text)
-        elif isinstance(block, Table):
-            for row in block.rows:
-                for cell in row.cells:
-                    for p in cell.paragraphs: check_text(p.text)
-    return count
-
 def replace_text_preserve_formatting(para: Paragraph, pattern: re.Pattern, callback):
     text = para.text
     matches = list(pattern.finditer(text))
     if not matches: return
 
     replacements = [callback(m) for m in matches]
-
     run_map = []
     for r_idx, run in enumerate(para.runs):
         for c_idx in range(len(run.text)): run_map.append((r_idx, c_idx))
@@ -197,22 +191,17 @@ def replace_text_preserve_formatting(para: Paragraph, pattern: re.Pattern, callb
             run_end.text = run_end.text[end_c_idx + 1:]
 
 def apply_html_formatting_to_runs(para: Paragraph):
-    """Scans native Word runs for HTML tags injected by citeproc-py, splits the run, and applies formatting natively."""
+    """Scans native Word runs for HTML tags, splits the run, and applies formatting natively using explicit property setters."""
     tag_pattern = re.compile(r'(</?(?:i|em|b|strong|sup|sub|span)[^>]*>)', re.IGNORECASE)
-    
-    # Snapshot the runs so we can safely modify the paragraph during iteration
     runs = list(para.runs)
+    
     for run in runs:
-        if not run.text or '<' not in run.text:
-            continue
-            
+        if not run.text or '<' not in run.text: continue
         parts = tag_pattern.split(run.text)
-        if len(parts) == 1:
-            continue
+        if len(parts) == 1: continue
             
-        # Inherit the base styles of the run we are splitting
-        is_i = run.italic
-        is_b = run.bold
+        is_i = run.font.italic
+        is_b = run.font.bold
         is_sup = run.font.superscript
         is_sub = run.font.subscript
         is_sc = run.font.small_caps
@@ -225,68 +214,55 @@ def apply_html_formatting_to_runs(para: Paragraph):
             if not part: continue
             part_lower = part.lower()
             
-            # Toggle format states if it's an HTML tag
             if part_lower.startswith('<') and part_lower.endswith('>'):
-                if part_lower in ['<i>', '<em>']: is_i = True
-                elif part_lower in ['</i>', '</em>']: is_i = False
-                elif part_lower in ['<b>', '<strong>']: is_b = True
-                elif part_lower in ['</b>', '</strong>']: is_b = False
-                elif part_lower == '<sup>': is_sup = True
-                elif part_lower == '</sup>': is_sup = False
-                elif part_lower == '<sub>': is_sub = True
-                elif part_lower == '</sub>': is_sub = False
+                if part_lower.startswith('<i') or part_lower.startswith('<em'): is_i = True
+                elif part_lower.startswith('</i') or part_lower.startswith('</em'): is_i = False
+                elif part_lower.startswith('<b') or part_lower.startswith('<strong'): is_b = True
+                elif part_lower.startswith('</b') or part_lower.startswith('</strong'): is_b = False
+                elif part_lower.startswith('<sup'): is_sup = True
+                elif part_lower.startswith('</sup'): is_sup = False
+                elif part_lower.startswith('<sub'): is_sub = True
+                elif part_lower.startswith('</sub'): is_sub = False
                 elif 'small-caps' in part_lower and not part_lower.startswith('</'): is_sc = True
                 elif part_lower.startswith('</span'): is_sc = False
             else:
-                # Add the actual text as a new Run object with active format states
                 new_run = para.add_run(part)
-                new_run.italic = is_i
-                new_run.bold = is_b
-                new_run.font.superscript = is_sup
-                new_run.font.subscript = is_sub
-                new_run.font.small_caps = is_sc
-                if font_name:
-                    new_run.font.name = font_name
+                # Ensure the new run inherits the specific paragraph character style (if any)
+                if run.style: 
+                    new_run.style = run.style
+                    
+                # Explicit property setting completely bypasses the python-docx chaining bug
+                if is_i is not None: new_run.font.italic = is_i
+                if is_b is not None: new_run.font.bold = is_b
+                if is_sup is not None: new_run.font.superscript = is_sup
+                if is_sub is not None: new_run.font.subscript = is_sub
+                if is_sc is not None: new_run.font.small_caps = is_sc
+                if font_name: new_run.font.name = font_name
                 
-                # Insert the new run element natively at the correct position
                 parent.insert(idx, new_run._element)
                 idx += 1
                 
-        # Remove the old, unformatted raw HTML run
         parent.remove(run._element)
 
-def process_paragraph_content(para: Paragraph, manager: CSLCitationManager, citation_pattern: re.Pattern, in_main_body: bool, convert_superscripts: bool):
-    max_ref = max(manager.id_map.keys()) if manager.id_map else 0
-
+def process_paragraph_content(para: Paragraph, manager: CSLCitationManager, citation_pattern: re.Pattern, in_main_body: bool):
     preceding_text = ""
     for run in para.runs:
         text = run.text.strip()
         
-        if convert_superscripts and in_main_body and run.font.superscript and re.match(r'^[\d,\s\-–]+$', text):
-            
+        # Convert native Word superscripts (e.g., ^1,2,3) to [1,2,3] unconditionally so the citation engine catches them
+        if in_main_body and run.font.superscript and re.match(r'^[\d,\s\-–]+$', text):
             is_math_power = bool(POWER_PATTERN.search(preceding_text)) and text.isdigit()
-            
-            if (AA_PATTERN_3.search(preceding_text) or 
-                AA_PATTERN_1.search(preceding_text) or 
-                MATH_UNIT_PATTERN.search(preceding_text) or 
-                IGNORE_PREFIXES.search(preceding_text) or 
-                is_math_power):
-                
-                preceding_text += run.text
-                continue
-            
-            clean_text = text.replace('–', '-')
-            is_valid = True
-            for part in clean_text.split(','):
-                if '-' in part:
-                    b = part.split('-')
-                    if not (len(b) == 2 and b[0].strip().isdigit() and b[1].strip().isdigit()): is_valid = False
-                elif not part.strip().isdigit(): is_valid = False
-            
-            if is_valid:
-                run.font.superscript = False
-                run.text = f"[{text}]"
-                
+            if not (AA_PATTERN_3.search(preceding_text) or AA_PATTERN_1.search(preceding_text) or MATH_UNIT_PATTERN.search(preceding_text) or IGNORE_PREFIXES.search(preceding_text) or is_math_power):
+                is_valid = True
+                for part in text.replace('–', '-').split(','):
+                    if '-' in part:
+                        b = part.split('-')
+                        if not (len(b) == 2 and b[0].strip().isdigit() and b[1].strip().isdigit()): is_valid = False
+                    elif not part.strip().isdigit(): is_valid = False
+                if is_valid:
+                    run.font.superscript = False
+                    run.text = f"[{text}]"
+                    
         preceding_text += run.text
     
     artifact_pattern = re.compile(r'(?:geometry|ref|source)\.(\d+)', re.IGNORECASE)
@@ -294,16 +270,11 @@ def process_paragraph_content(para: Paragraph, manager: CSLCitationManager, cita
 
     def replace_callback(match: Match) -> str:
         preceding = para.text[:match.start()]
-        
-        if (AA_PATTERN_3.search(preceding) or 
-            AA_PATTERN_1.search(preceding) or 
-            MATH_UNIT_PATTERN.search(preceding) or 
-            IGNORE_PREFIXES.search(preceding)):
+        if (AA_PATTERN_3.search(preceding) or AA_PATTERN_1.search(preceding) or MATH_UNIT_PATTERN.search(preceding) or IGNORE_PREFIXES.search(preceding)):
             return match.group(0)
 
         raw_inner = match.group(1).replace('–', '-')
-        if match.group(0).startswith('(') and raw_inner.isdigit() and 1900 <= int(raw_inner) <= 2100:
-            return match.group(0)
+        if match.group(0).startswith('(') and raw_inner.isdigit() and 1900 <= int(raw_inner) <= 2100: return match.group(0)
 
         oids = []
         for part in raw_inner.split(','):
@@ -312,98 +283,101 @@ def process_paragraph_content(para: Paragraph, manager: CSLCitationManager, cita
                 bounds = part.split('-')
                 if len(bounds) == 2 and bounds[0].strip().isdigit() and bounds[1].strip().isdigit():
                     start, end = int(bounds[0].strip()), int(bounds[1].strip())
-                    if start <= end and (end - start) < 50:
-                        oids.extend(range(start, end + 1))
+                    if start <= end and (end - start) < 50: oids.extend(range(start, end + 1))
                     else: return match.group(0)
                 else: return match.group(0)
             else:
                 if not part.isdigit(): return match.group(0)
                 oids.append(int(part))
         
-        # Execute citation generation
+        valid_keys = [manager.id_map[o] for o in oids if o in manager.id_map]
+        if not valid_keys: return match.group(0)
+        
         manager.update_count += 1 
-        return manager.get_in_text_citation(oids)
+        return manager.get_in_text_citation(valid_keys)
 
     replace_text_preserve_formatting(para, citation_pattern, replace_callback)
+
+    ay_pattern = re.compile(r'\(([A-Za-z][^()]*?(?:19|20)\d{2}[a-z]?)\)')
+    def replace_ay_callback(match: Match) -> str:
+        raw_inner = match.group(1)
+        if '=' in raw_inner or '+' in raw_inner: return match.group(0)
+            
+        parts, matched_keys, valid_part_count = raw_inner.split(';'), [], 0
+        for part in parts:
+            year_match = re.search(r'((?:19|20)\d{2})', part)
+            if not year_match: continue
+            valid_part_count += 1
+            author_text = re.sub(r'(?:19|20)\d{2}[a-z]?|et al\.?|,|&', '', part).strip().lower()
+            
+            best_match, best_score = None, 80
+            for item in manager.ay_map:
+                if item['year'] == year_match.group(1):
+                    score = fuzz.partial_ratio(author_text, item['author'])
+                    if score > best_score:
+                        best_score = score
+                        best_match = item['key']
+            
+            if best_match: matched_keys.append(best_match)
+        
+        if valid_part_count > 0 and len(matched_keys) == valid_part_count:
+            manager.update_count += 1
+            return manager.get_in_text_citation(matched_keys)
+        return match.group(0)
+
+    replace_text_preserve_formatting(para, ay_pattern, replace_ay_callback)
     
-    # --- NEW: Convert literal HTML tags in the text into native Word Rich Text ---
+    # Process html tags into Word document natively
     apply_html_formatting_to_runs(para)
 
 def write_rich_bibliography_entry(doc: Document, html_text: str, main_font: Optional[str], insert_cursor: Optional[Paragraph] = None):
-    """Parses HTML output from citeproc-py and maps directly to python-docx Rich Text Runs."""
-    if insert_cursor is not None:
-        p = insert_cursor.insert_paragraph_before()
-    else:
-        p = doc.add_paragraph()
+    p = insert_cursor.insert_paragraph_before() if insert_cursor is not None else doc.add_paragraph()
+    html_text = html_text.replace('.. ', '. ').replace('..<', '.<')
+    html_text = html_text.replace('</div><div class="csl-right-inline">', '</div><div class="csl-right-inline">' + chr(160))
+    html_text = re.sub(r'^((?:<[^>]+>|\s)*)(\[\d+\]|\d+\.)\s*(<[^>]+>)?\s*([A-Za-z])', r'\1\2' + chr(160) + r'\3\4', html_text)
     
-    # State flags
-    is_bold = False
-    is_italic = False
-    is_smallcaps = False
-    is_sup = False
-    is_sub = False
-
-    # Regex splits by XML/HTML tags
+    is_bold = is_italic = is_smallcaps = is_sup = is_sub = False
     tokens = re.split(r'(<[^>]+>)', html_text)
     
     for token in tokens:
         if not token: continue
-        
         token_lower = token.lower()
         if token_lower.startswith('<'):
-            # Handle styles
-            if token_lower in ['<b>', '<strong>']: is_bold = True
-            elif token_lower in ['</b>', '</strong>']: is_bold = False
-            elif token_lower in ['<i>', '<em>']: is_italic = True
-            elif token_lower in ['</i>', '</em>']: is_italic = False
-            elif token_lower == '<sup>': is_sup = True
-            elif token_lower == '</sup>': is_sup = False
-            elif token_lower == '<sub>': is_sub = True
-            elif token_lower == '</sub>': is_sub = False
+            if token_lower.startswith('<b') or token_lower.startswith('<strong'): is_bold = True
+            elif token_lower.startswith('</b') or token_lower.startswith('</strong'): is_bold = False
+            elif token_lower.startswith('<i') or token_lower.startswith('<em'): is_italic = True
+            elif token_lower.startswith('</i') or token_lower.startswith('</em'): is_italic = False
+            elif token_lower.startswith('<sup'): is_sup = True
+            elif token_lower.startswith('</sup'): is_sup = False
+            elif token_lower.startswith('<sub'): is_sub = True
+            elif token_lower.startswith('</sub'): is_sub = False
             elif 'small-caps' in token_lower and not token_lower.startswith('</'): is_smallcaps = True
             elif token_lower.startswith('</span'): is_smallcaps = False
-            # Ignore structural divs like <div class="csl-entry">
             continue
         
-        # It's a text node. Decode HTML entities (e.g., &amp; -> &)
         text_content = html.unescape(token)
         if text_content:
             run = p.add_run(text_content)
-            run.bold = is_bold
-            run.italic = is_italic
+            run.bold, run.italic = is_bold, is_italic
             if is_smallcaps: run.font.small_caps = True
             if is_sup: run.font.superscript = True
             if is_sub: run.font.subscript = True
             if main_font: run.font.name = main_font
 
-
 def process_document(docx_path: Path, output_path: Path, manager: CSLCitationManager):
-    print(f"\nProcessing document: {docx_path} (Using Style: {manager.csl_file.name})...")
+    print(f"\nProcessing document: {docx_path.name}")
     doc = Document(str(docx_path))
     citation_pattern = re.compile(r'[\[\(]([\d\s,\-–]+)[\]\)]')
 
     main_font = None
     for p in doc.paragraphs:
         for r in p.runs:
-            if r.font.name:
-                main_font = r.font.name
-                break
+            if r.font.name: main_font = r.font.name; break
         if main_font: break
-
-    bracket_count = count_bracketed_citations(doc)
-    # Autodetect if document is using bracketed or superscript styling
-    convert_superscripts = (bracket_count < 3)
-    
-    if convert_superscripts:
-        print("   -> [Info] Auto-detected Superscript format. Superscript Converter ENABLED.")
-    else:
-        print(f"   -> [Info] Auto-detected Bracketed format ({bracket_count} brackets). Superscript Converter DISABLED.")
 
     ref_header_element = None
     for p in doc.paragraphs:
-        if REF_HEADER_PATTERN.match(p.text):
-            ref_header_element = p._element
-            break
+        if REF_HEADER_PATTERN.match(p.text): ref_header_element = p._element; break
 
     in_main_body = False 
     block_counter = 0
@@ -412,90 +386,60 @@ def process_document(docx_path: Path, output_path: Path, manager: CSLCitationMan
         block_counter += 1
         if isinstance(block, Paragraph):
             if ref_header_element is not None and block._element == ref_header_element: break 
-
             if not in_main_body:
                 text_clean = block.text.strip().lower()
-                if text_clean in ['abstract', 'introduction', 'background', 'summary', 'methods', 'results']:
-                    in_main_body = True
+                if text_clean in ['abstract', 'introduction', 'background', 'summary', 'methods', 'results']: in_main_body = True
                 else:
                     words = re.findall(r'\b[a-z]+\b', text_clean)
-                    stop_matches = [w for w in words if w in PROSE_STOP_WORDS]
-                    if len(words) >= 25 and len(stop_matches) >= 5:
-                        in_main_body = True
-                
-                if block_counter > 25 and not in_main_body:
-                    in_main_body = True
+                    if len(words) >= 25 and len([w for w in words if w in PROSE_STOP_WORDS]) >= 5: in_main_body = True
+                if block_counter > 25 and not in_main_body: in_main_body = True
 
-            process_paragraph_content(block, manager, citation_pattern, in_main_body, convert_superscripts)
+            process_paragraph_content(block, manager, citation_pattern, in_main_body)
             
         elif isinstance(block, Table):
             if not in_main_body: continue 
             for row in block.rows:
                 for cell in row.cells:
                     for para in cell.paragraphs:
-                        process_paragraph_content(para, manager, citation_pattern, in_main_body, convert_superscripts)
+                        process_paragraph_content(para, manager, citation_pattern, in_main_body)
 
-    # 1. Clear Old Bibliography Header and Content
     ref_header_index = -1
     for i, p in enumerate(doc.paragraphs):
-        if p._element == ref_header_element:
-            ref_header_index = i
-            break
+        if p._element == ref_header_element: ref_header_index = i; break
             
     insert_cursor = None
-    
     if ref_header_index != -1:
         post_ref_index = -1
-        # Scan forwards from the references header to find the end of the bibliography
         for i in range(ref_header_index + 1, len(doc.paragraphs)):
             text = doc.paragraphs[i].text.strip()
-            # If we hit a major section header that commonly appears AFTER references
             if text and POST_REF_PATTERN.match(text):
-                post_ref_index = i
-                break
+                post_ref_index = i; break
                 
         if post_ref_index != -1:
             paragraphs_to_remove = doc.paragraphs[ref_header_index:post_ref_index]
             insert_cursor = doc.paragraphs[post_ref_index]
-            
-            # --- NEW: Force the subsequent section (e.g., Figure Legends) to a fresh page ---
             insert_cursor.paragraph_format.page_break_before = True
-            
         else:
             paragraphs_to_remove = doc.paragraphs[ref_header_index:]
             
-        # Delete only the old bibliography
         for p in paragraphs_to_remove:
-            p_elm = p._element
-            parent = p_elm.getparent()
-            if parent is not None:
-                parent.remove(p_elm)
+            parent = p._element.getparent()
+            if parent is not None: parent.remove(p._element)
 
-    def insert_reference_heading(cursor):
-        if cursor is not None:
-            p = cursor.insert_paragraph_before()
-        else:
-            p = doc.add_paragraph()
-            
-        # --- NEW: Force the References heading to start on a fresh page ---
-        p.paragraph_format.page_break_before = True
-        
-        run = p.add_run('References')
-        run.bold = True
-        if main_font: run.font.name = main_font
+    p = insert_cursor.insert_paragraph_before() if insert_cursor is not None else doc.add_paragraph()
+    p.paragraph_format.page_break_before = True
+    run = p.add_run('References')
+    run.bold = True
+    if main_font: run.font.name = main_font
 
-    insert_reference_heading(insert_cursor)
-
-    # 2. Rebuild the Unified Bibliography via CSL Engine
     print(f"   -> Rebuilding Rich-Text Bibliography via CSL...")
     manager.bibliography.sort()
     for entry in manager.bibliography.bibliography():
-        html_entry = str(entry)
-        write_rich_bibliography_entry(doc, html_entry, main_font, insert_cursor)
+        write_rich_bibliography_entry(doc, str(entry), main_font, insert_cursor)
 
     doc.save(str(output_path))
-    print(f"Success! Saved to {output_path}")
-    print(f" -> Tracked and dynamically updated {manager.update_count} in-text citation brackets.")
+    print(f"Success! Saved to {output_path.name}")
+    print(f" -> Tracked and dynamically updated {manager.update_count} in-text citations.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -504,25 +448,20 @@ if __name__ == "__main__":
     parser.add_argument("--csl", type=Path, required=True, help="Path to the CSL style file")
     args = parser.parse_args()
     
-    # --- NEW: CSL Path Resolution Logic ---
     csl_path = args.csl
     default_csl_dir = Path("~/citation_styles").expanduser()
     
     if not csl_path.exists():
         alt_path = default_csl_dir / csl_path.name
-        if alt_path.exists():
-            csl_path = alt_path
+        if alt_path.exists(): csl_path = alt_path
         elif not csl_path.suffix == '.csl':
             alt_path_ext = default_csl_dir / f"{csl_path.name}.csl"
-            if alt_path_ext.exists():
-                csl_path = alt_path_ext
+            if alt_path_ext.exists(): csl_path = alt_path_ext
                 
     if not csl_path.exists():
         print(f"❌ ERROR: CSL file '{args.csl}' not found locally or in {default_csl_dir}.")
         sys.exit(1)
-    # ---------------------------------------
         
     output = args.doc.with_name(f"{args.doc.stem}_final_{csl_path.stem}.docx")
-    
     mgr = CSLCitationManager(args.bib, csl_path)
     process_document(args.doc, output, mgr)
