@@ -1,4 +1,4 @@
-# Manuscript Reference Toolkit ARM (Another Reference Manager Revision 3)
+# Manuscript Reference Toolkit ARM (Another Reference Manager V1-Revision 3)
 
 ![Python Version](https://img.shields.io/badge/python-3.x-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -83,4 +83,61 @@ python scan_raw_refs_r3.py "MyDraft.docx"
 ### Step 2: Verify & Enrich
 Takes the extracted `.bib` file, hits PubMed/Crossref, and fills in all missing Journal names, Volumes, and Authors.
 ```bash
-python verify_bib_r3.py "MyDraft_extract
+python verify_bib_r3.py "MyDraft_extracted.bib"
+```
+
+### Step 3: Apply to Manuscript via CSL Engine
+Takes your verified references and applies them to the document using your target CSL style.
+```bash
+python apply_citations_r3.py "MyDraft_extracted_verified.bib" "MyDraft.docx" --csl "nature.csl"
+```
+
+---
+
+## 🛠️ Troubleshooting
+
+### "Dependent" CSL Style Error
+If the script aborts with an error stating that your `.csl` file is a **dependent style**, it means the file you downloaded from the Zotero Style Repository is just a lightweight link to a "parent" publisher style (e.g., *The EMBO Journal* uses *EMBO Press*).
+
+**Solution:**
+1. Read the terminal error message—the script will automatically scan the XML and tell you the exact name and URL of the parent style you need.
+2. Download that parent `.csl` file and place it in your `~/citation_styles/` folder.
+3. Rerun the script using the parent style.
+
+*Example:* `python auto_format_manuscript.py "MyDraft.docx" --csl embo-press`
+
+---
+
+## 📊 Extra Tools
+
+### 1. Inject DOIs into an Intermediate Draft
+If you want to quickly append clickable DOIs to the raw references of an intermediate draft (for co-authors to easily click/read papers) *without* fully reformatting the document or changing in-text citations:
+```bash
+python add_dois_to_draft.py "MyDraft_extracted_verified.bib" "MyDraft.docx"
+```
+*   **Output:** `MyDraft_with_DOIs.docx` (Your original draft, with `https://doi.org/...` seamlessly appended to references that were missing it).
+
+### 2. Generate a Text Report
+If you just want a clean text file of your references (without modifying a Word document), you can use the reporter script on any verified `.bib` file:
+```bash
+python generate_report_r3.py "MyDraft_extracted_verified.bib"
+```
+*   **Output:** `MyDraft_extracted_verified_list.txt`
+
+---
+
+## 📂 Script Directory Overview
+
+| Script Name | Purpose |
+| :--- | :--- |
+| **`auto_format_manuscript.py`** | **The Wrapper:** Runs all steps automatically using the CSL Engine. |
+| **`scan_raw_refs_r3.py`** | **The Auditor:** Scans `.docx` for raw refs, outputs CSV report and a raw `.bib` mapping. |
+| **`verify_bib_r3.py`** | **The Enrichment Engine:** Queries PubMed/Crossref to enrich missing metadata. |
+| **`apply_citations_r3.py`**| **The CSL Formatter:** Updates inline citations, protects math/fonts, and smartly paginates the Bibliography. |
+| **`add_dois_to_draft.py`**| **The Linker:** Appends DOIs to raw reference lists for intermediate co-author drafts. |
+| **`generate_report_r3.py`**| **The Reporter:** Converts `.bib` files into clean `.txt` lists. |
+
+---
+
+## 📝 Disclaimer
+*While this toolkit uses fuzzy logic, NLP shields, and official APIs to verify and map data, always perform a final visual review of the generated manuscript before submitting to a journal.*
