@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ref-management"
+version = "1.0.0"
+description = "Manuscript Reference Toolkit (ARM) — extract, verify, and format references in research manuscripts"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+dependencies = [
+    "bibtexparser>=1.4",
+    "python-docx>=1.0",
+    "biopython>=1.80",
+    "rapidfuzz>=3.0",
+    "requests>=2.28",
+    "citeproc-py>=0.6",
+]
+
+[project.scripts]
+arm-format   = "ref_management.auto_format:main"
+arm-scan     = "ref_management.scan_raw_refs:main"
+arm-verify   = "ref_management.verify_bib:main"
+arm-apply    = "ref_management.apply_citations:main"
+arm-add-dois = "ref_management.add_dois:main"
+arm-report   = "ref_management.generate_report:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ref_management*"]
