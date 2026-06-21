@@ -35,7 +35,7 @@ To query PubMed efficiently without hitting rate limits, you should configure yo
     ```
 
 **Option B: Hardcoding**
-You can edit the `Entrez.email` and `Entrez.api_key` lines directly at the top of the `verify_bib_r2.py` script.
+You can edit the `Entrez.email` and `Entrez.api_key` lines directly at the top of the `verify_bib_r3.py` script.
 
 ---
 
@@ -77,10 +77,10 @@ If you want to manually inspect or edit the references between steps, you can ru
 ### Step 1: Scan & Extract
 Reads the raw reference list at the bottom of your draft and maps them to PMIDs/DOIs.
 ```bash
-python scan_raw_refs_r2.py "MyDraft.docx"
+python scan_raw_refs_r3.py "MyDraft.docx"
 ```
 
 ### Step 2: Verify & Enrich
 Takes the extracted `.bib` file, hits PubMed/Crossref, and fills in all missing Journal names, Volumes, and Authors.
 ```bash
-python verify_bib_r2.py "MyDraft_extract
+python verify_bib_r3.py "MyDraft_extract
