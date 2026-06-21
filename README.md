@@ -16,6 +16,15 @@ This **Revision 3** toolkit bridges the gap between rough drafts (which often co
 *   **Dual-Database Verification:** Seamlessly falls back to **Crossref** if a DOI is not found in **PubMed** (perfect for statistics or older journals).
 *   **Smart Shields:** Protects $CV^2$, $R^2$, `Tyr530`, and $1 \times 10^5$ from being misread as citations.
 
+## 💡 Why ARM? (Advantages over Traditional Reference Managers)
+
+While conventional reference managers (e.g., Zotero, Mendeley, EndNote) are highly effective for personal library curation, they frequently introduce friction during multi-author manuscript preparation. ARM is specifically designed to resolve these collaborative bottlenecks:
+
+*   **Decentralized Collaborative Drafting:** Traditional tools require all co-authors to synchronize a centralized library database or install proprietary Word plugins. ARM completely eliminates personal library dependency. Co-authors can draft references organically in plain text (e.g., typing `(Author, Year)` or pasting raw, unformatted references at the bottom of the document), and the pipeline will dynamically resolve and format them.
+*   **Post-Hoc Resolution of Messy Drafts:** Instead of forcing authors to use a strict GUI to "insert" citations while writing, ARM acts as a robust post-processing engine. It takes rough drafts—often containing incomplete metadata, inconsistent formatting, or AI-hallucinated citations—and mathematically standardizes them against the PubMed and Crossref APIs.
+*   **Intelligent Text & Math Protection:** Standard Word plugins often override native typography or mangle inline mathematics (mistaking superscript numbers for citations). ARM utilizes NLP-driven "Smart Shields" to actively protect critical scientific nomenclature and statistical notations (e.g., $R^2$, $CV^2$, $1 \times 10^5$). 
+*   **Native Algorithmic Formatting:** Unlike traditional plugins that rely heavily on hidden Word XML field codes (which can corrupt documents when shared across different operating systems), ARM executes clean text-replacement algorithms that preserve your document's native fonts, margins, and layout.
+
 ---
 
 ## ⚙️ Configuration (Important)
