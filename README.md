@@ -1,4 +1,4 @@
-# Manuscript Reference Toolkit ARM (Another Reference Manager V1-Revision 3)
+# Manuscript Reference Toolkit ARM (Another Reference Manager v1-Revision 3)
 
 ![Python Version](https://img.shields.io/badge/python-3.x-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
