@@ -35,26 +35,37 @@ To query PubMed efficiently without hitting rate limits, you should configure yo
     ```
 
 **Option B: Hardcoding**
-You can edit the `Entrez.email` and `Entrez.api_key` lines directly at the top of the `verify_bib_r3.py` script.
+You can edit the `Entrez.email` and `Entrez.api_key` lines directly at the top of the `ref_management/verify_bib.py` module.
 
 ---
 
 ## 📦 Installation
 
-Requires Python 3. Install the required dependencies:
+Install directly from PyPI with a single command:
 
 ```bash
-pip install bibtexparser python-docx biopython rapidfuzz requests citeproc-py
+pip install ref-management
 ```
+
+This automatically installs all required dependencies (`bibtexparser`, `python-docx`, `biopython`, `rapidfuzz`, `requests`, `citeproc-py`) and creates the following CLI commands:
+
+| Command | Description |
+| :--- | :--- |
+| `arm-format` | End-to-end pipeline wrapper |
+| `arm-scan` | Scan & extract references from a `.docx` |
+| `arm-verify` | Enrich a `.bib` file via PubMed / Crossref |
+| `arm-apply` | Apply CSL formatting to the Word document |
+| `arm-add-dois` | Append missing DOIs to an intermediate draft |
+| `arm-report` | Generate a plain-text reference list from a `.bib` |
 
 ---
 
 ## 🚀 Workflow 1: Fully Automated Pipeline (Recommended)
 
-Use this wrapper script to execute the entire extraction, verification, and formatting process automatically. 
+Use this wrapper command to execute the entire extraction, verification, and formatting process automatically. 
 
 ```bash
-python auto_format_manuscript.py "MyDraft.docx" --csl "nature"
+arm-format "MyDraft.docx" --csl "nature"
 ```
 
 > **💡 Pro-Tip (Default Directory):** You can create a folder at `~/citation_styles/` and store all your downloaded `.csl` files from Zotero there. The pipeline will automatically search this folder, meaning you can simply type `--csl cell` instead of providing the full file path.
@@ -77,19 +88,19 @@ If you want to manually inspect or edit the references between steps, you can ru
 ### Step 1: Scan & Extract
 Reads the raw reference list at the bottom of your draft and maps them to PMIDs/DOIs.
 ```bash
-python scan_raw_refs_r3.py "MyDraft.docx"
+arm-scan "MyDraft.docx"
 ```
 
 ### Step 2: Verify & Enrich
 Takes the extracted `.bib` file, hits PubMed/Crossref, and fills in all missing Journal names, Volumes, and Authors.
 ```bash
-python verify_bib_r3.py "MyDraft_extracted.bib"
+arm-verify "MyDraft_extracted.bib"
 ```
 
 ### Step 3: Apply to Manuscript via CSL Engine
 Takes your verified references and applies them to the document using your target CSL style.
 ```bash
-python apply_citations_r3.py "MyDraft_extracted_verified.bib" "MyDraft.docx" --csl "nature.csl"
+arm-apply "MyDraft_extracted_verified.bib" "MyDraft.docx" --csl "nature.csl"
 ```
 
 ---
@@ -104,7 +115,7 @@ If the script aborts with an error stating that your `.csl` file is a **dependen
 2. Download that parent `.csl` file and place it in your `~/citation_styles/` folder.
 3. Rerun the script using the parent style.
 
-*Example:* `python auto_format_manuscript.py "MyDraft.docx" --csl embo-press`
+*Example:* `arm-format "MyDraft.docx" --csl embo-press`
 
 ---
 
@@ -113,29 +124,29 @@ If the script aborts with an error stating that your `.csl` file is a **dependen
 ### 1. Inject DOIs into an Intermediate Draft
 If you want to quickly append clickable DOIs to the raw references of an intermediate draft (for co-authors to easily click/read papers) *without* fully reformatting the document or changing in-text citations:
 ```bash
-python add_dois_to_draft.py "MyDraft_extracted_verified.bib" "MyDraft.docx"
+arm-add-dois "MyDraft_extracted_verified.bib" "MyDraft.docx"
 ```
 *   **Output:** `MyDraft_with_DOIs.docx` (Your original draft, with `https://doi.org/...` seamlessly appended to references that were missing it).
 
 ### 2. Generate a Text Report
-If you just want a clean text file of your references (without modifying a Word document), you can use the reporter script on any verified `.bib` file:
+If you just want a clean text file of your references (without modifying a Word document), you can use the reporter command on any verified `.bib` file:
 ```bash
-python generate_report_r3.py "MyDraft_extracted_verified.bib"
+arm-report "MyDraft_extracted_verified.bib"
 ```
 *   **Output:** `MyDraft_extracted_verified_list.txt`
 
 ---
 
-## 📂 Script Directory Overview
+## 📂 Module Overview
 
-| Script Name | Purpose |
+| Module / Command | Purpose |
 | :--- | :--- |
-| **`auto_format_manuscript.py`** | **The Wrapper:** Runs all steps automatically using the CSL Engine. |
-| **`scan_raw_refs_r3.py`** | **The Auditor:** Scans `.docx` for raw refs, outputs CSV report and a raw `.bib` mapping. |
-| **`verify_bib_r3.py`** | **The Enrichment Engine:** Queries PubMed/Crossref to enrich missing metadata. |
-| **`apply_citations_r3.py`**| **The CSL Formatter:** Updates inline citations, protects math/fonts, and smartly paginates the Bibliography. |
-| **`add_dois_to_draft.py`**| **The Linker:** Appends DOIs to raw reference lists for intermediate co-author drafts. |
-| **`generate_report_r3.py`**| **The Reporter:** Converts `.bib` files into clean `.txt` lists. |
+| **`arm-format`** | **The Wrapper:** Runs all steps automatically using the CSL Engine. |
+| **`arm-scan`** | **The Auditor:** Scans `.docx` for raw refs, outputs CSV report and a raw `.bib` mapping. |
+| **`arm-verify`** | **The Enrichment Engine:** Queries PubMed/Crossref to enrich missing metadata. |
+| **`arm-apply`** | **The CSL Formatter:** Updates inline citations, protects math/fonts, and smartly paginates the Bibliography. |
+| **`arm-add-dois`** | **The Linker:** Appends DOIs to raw reference lists for intermediate co-author drafts. |
+| **`arm-report`** | **The Reporter:** Converts `.bib` files into clean `.txt` lists. |
 
 ---
 
