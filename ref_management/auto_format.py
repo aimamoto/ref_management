@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 def main():
-    parser = argparse.ArgumentParser(description="Another Reference Management (ARM) Pipeline")
+    parser = argparse.ArgumentParser(description="Another Reference Manager (ARM)")
     parser.add_argument("document", type=Path, nargs='?', help="Path to the input .docx file")
     parser.add_argument("--csl", type=Path, help="Path to the desired .csl file")
     args = parser.parse_args()
