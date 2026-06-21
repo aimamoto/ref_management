@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 def main():
-    parser = argparse.ArgumentParser(description="End-to-end AI Manuscript Reference Pipeline (CSL Engine)")
+    parser = argparse.ArgumentParser(description="Another Reference Management (ARM) Pipeline")
     parser.add_argument("document", type=Path, nargs='?', help="Path to the input .docx file")
     parser.add_argument("--csl", type=Path, help="Path to the desired .csl file")
     args = parser.parse_args()
@@ -14,7 +14,7 @@ def main():
     # 1. Check Input Document
     doc_path = args.document
     if not doc_path:
-        print("\n=== AI Manuscript Auto-Formatter (Universal CSL Edition) ===")
+        print("\n=== ARM Manuscript Auto-Formatter (Universal CSL Edition) ===")
         doc_input = input("Enter the path to your .docx file: ").strip().strip('"').strip("'")
         doc_path = Path(doc_input)
         
