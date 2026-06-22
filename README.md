@@ -6,7 +6,7 @@ A comprehensive Python toolkit designed to extract, verify, correct, and format 
 
 This **Revision 3** toolkit bridges the gap between rough drafts (which often contain raw references, incomplete metadata, or AI hallucinations) and a **finalized, submission-ready Word document**. It features a new **Universal CSL Formatting Engine**, an **Author-Year Bridge** (allowing you to draft with `(Author, Year)` and automatically convert to numeric formats if needed), and intelligent text-replacement algorithms that preserve your document's native fonts and formatting.
 
-## 🌟 Key Features (r3 Updates)
+## Key Features (r3 Updates)
 
 *   **Universal CSL Engine:** Powered by `citeproc-py`, simply provide any Citation Style Language (`.csl`) file (e.g., from the Zotero repository) to format your manuscript exactly to specific journal requirements (e.g., Nature, Cell, APA).
 *   **The Author-Year Bridge:** Draft naturally with `(Smith, 2024)` in text. The pipeline will fuzzy-match the authors to your bibliography and dynamically convert them to whatever your CSL demands (e.g., converting to `1–3` superscripts).
@@ -16,18 +16,16 @@ This **Revision 3** toolkit bridges the gap between rough drafts (which often co
 *   **Dual-Database Verification:** Seamlessly falls back to **Crossref** if a DOI is not found in **PubMed** (perfect for statistics or older journals).
 *   **Smart Shields:** Protects $CV^2$, $R^2$, `Tyr530`, and $1 \times 10^5$ from being misread as citations.
 
-## 💡 Why ARM? (Advantages over Traditional Reference Managers)
+## Why ARM? (Advantages over Traditional Reference Managers)
 
 While conventional reference managers (e.g., Zotero, Mendeley, EndNote) are highly effective for personal library curation, they frequently introduce friction during multi-author manuscript preparation. ARM is specifically designed to resolve these collaborative bottlenecks:
 
 *   **Decentralized Collaborative Drafting:** Traditional tools require all co-authors to synchronize a centralized library database or install proprietary Word plugins. ARM completely eliminates personal library dependency. Co-authors can draft references organically in plain text (e.g., typing `(Author, Year)` or pasting raw, unformatted references at the bottom of the document), and the pipeline will dynamically resolve and format them.
-*   **Post-Hoc Resolution of Messy Drafts:** Instead of forcing authors to use a strict GUI to "insert" citations while writing, ARM acts as a robust post-processing engine. It takes rough drafts—often containing incomplete metadata, inconsistent formatting, or AI-hallucinated citations—and mathematically standardizes them against the PubMed and Crossref APIs.
+*   **Post-Hoc Resolution of Messy Drafts:** Instead of forcing authors to use a strict GUI to "insert" citations while writing, ARM acts as a robust post-processing compiler. It takes rough drafts—often containing incomplete metadata, inconsistent formatting, or AI-hallucinated citations—and mathematically standardizes them against the PubMed and Crossref APIs.
 *   **Intelligent Text & Math Protection:** Standard Word plugins often override native typography or mangle inline mathematics (mistaking superscript numbers for citations). ARM utilizes NLP-driven "Smart Shields" to actively protect critical scientific nomenclature and statistical notations (e.g., $R^2$, $CV^2$, $1 \times 10^5$). 
 *   **Native Algorithmic Formatting:** Unlike traditional plugins that rely heavily on hidden Word XML field codes (which can corrupt documents when shared across different operating systems), ARM executes clean text-replacement algorithms that preserve your document's native fonts, margins, and layout.
 
----
-
-## ⚙️ Configuration (Important)
+## Configuration (Important)
 
 To query PubMed efficiently without hitting rate limits, you should configure your NCBI credentials.
 
@@ -90,7 +88,7 @@ arm-format "MyDraft.docx" --csl "nature"
 
 ---
 
-## 🔧 Workflow 2: Partial / Step-by-Step Pipeline
+## Workflow 2: Partial / Step-by-Step Pipeline
 
 If you want to manually inspect or edit the references between steps, you can run the modules individually.
 
@@ -114,7 +112,7 @@ arm-apply "MyDraft_extracted_verified.bib" "MyDraft.docx" --csl "nature.csl"
 
 ---
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 ### "Dependent" CSL Style Error
 If the script aborts with an error stating that your `.csl` file is a **dependent style**, it means the file you downloaded from the Zotero Style Repository is just a lightweight link to a "parent" publisher style (e.g., *The EMBO Journal* uses *EMBO Press*).
@@ -128,7 +126,7 @@ If the script aborts with an error stating that your `.csl` file is a **dependen
 
 ---
 
-## 📊 Extra Tools
+## Extra Tools
 
 ### 1. Inject DOIs into an Intermediate Draft
 If you want to quickly append clickable DOIs to the raw references of an intermediate draft (for co-authors to easily click/read papers) *without* fully reformatting the document or changing in-text citations:
@@ -146,7 +144,7 @@ arm-report "MyDraft_extracted_verified.bib"
 
 ---
 
-## 📂 Module Overview
+## Module Overview
 
 | Module / Command | Purpose |
 | :--- | :--- |
@@ -159,5 +157,5 @@ arm-report "MyDraft_extracted_verified.bib"
 
 ---
 
-## 📝 Disclaimer
+## Disclaimer
 *While this toolkit uses fuzzy logic, NLP shields, and official APIs to verify and map data, always perform a final visual review of the generated manuscript before submitting to a journal.*
