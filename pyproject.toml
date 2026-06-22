@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ref-management"
-version = "1.0.3"
+version = "1.0.5"
 description = "Manuscript Reference Toolkit (ARM) — extract, verify, and format references in research manuscripts"
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
+authors = [
+    { name = "Akira Imamoto", email = "aimamoto@uchicago.edu" }
+]
 dependencies = [
     "bibtexparser>=1.4",
     "python-docx>=1.0",
@@ -17,6 +20,10 @@ dependencies = [
     "requests>=2.28",
     "citeproc-py>=0.6",
 ]
+
+[project.urls]
+Homepage = "https://github.com/aimamoto/ref_management"
+Repository = "https://github.com/aimamoto/ref_management"
 
 [project.scripts]
 arm-format   = "ref_management.auto_format:main"
