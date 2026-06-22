@@ -16,6 +16,9 @@ Entrez.api_key = os.environ.get("NCBI_API_KEY", None)
 if Entrez.api_key is None:
     print("Tip: Set NCBI_API_KEY environment variable to avoid request limits.", file=sys.stderr)
 
+# --- POST-REFERENCE BOUNDARY ---
+POST_REF_PATTERN = re.compile(r'^\s*(?:Tables?|Figures?|Figure Legends?|Supplementary.*?|Appendices|Data Availability|Acknowledgements?|Author Contributions?|Funding|Conflict(?:s)? of Interest|Competing Interests?|(?:Table|Figure|Fig\.?)\s*\d+.*)$', re.IGNORECASE)
+
 # --- HELPERS ---
 def clean_word(word):
     return re.sub(r'[^\w]', '', word)
@@ -74,18 +77,15 @@ def extract_citation_parts(text):
         raw_year = selected_year_match.group(0)
         data["year"] = re.sub(r'[a-z]', '', raw_year)
         
-        # Determine if Author-Year or Vancouver style based on Year placement
         if selected_year_match.start() > len(text) / 2:
             snippet = text[:selected_year_match.start()].strip()
         else:
             snippet = text[selected_year_match.end():].strip()
             
-        # URL/DOI Scrubber (Prevents them from leaking into the Title)
         snippet = re.sub(r'(?i)https?://\S+', '', snippet)
         snippet = re.sub(r'(?i)doi:?\s*10\.\d{4,9}/[-._;()/:a-zA-Z0-9<>\[\]]+', '', snippet)
         data["title_snippet"] = re.sub(r'^[\s\)\.,:;-]+|[\s\.,:;-]+$', '', snippet)
         
-        # Improved Raw Author Parsing
         author_raw = text[:selected_year_match.start()].split('.')[0].strip()
         author_raw = re.sub(r'^\[?\d+\]?\s*', '', author_raw) 
         if len(author_raw) > 3:
@@ -182,7 +182,13 @@ def analyze_document(file_path):
     try:
         if ext == '.docx':
             doc = Document(file_path)
-            all_paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+            # --- ULTIMATE EXTRACTION: Penetrates SDT boxes, Tables, and Track Changes! ---
+            # Finds every single paragraph XML node (<w:p>) anywhere in the document
+            for p_node in doc.element.body.xpath('.//w:p'):
+                # Extracts text (<w:t>) while safely ignoring deleted Track Changes
+                text = "".join(node.text for node in p_node.xpath('.//w:t') if node.text).strip()
+                if text: 
+                    all_paragraphs.append(text)
         elif ext == '.txt':
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
@@ -206,19 +212,28 @@ def analyze_document(file_path):
     except Exception as e:
         print(f"ERROR: Could not open file. {e}"); return [], [], []
 
-    header_regex = re.compile(r'^\s*(?:[0-9]+\.?\s*)?(?:REFERENCES|BIBLIOGRAPHY|LITERATURE CITED|WORKS CITED)\s*$', re.IGNORECASE)
+    header_regex = re.compile(r'^\s*(?:[0-9]+\.?\s*)?(?:REFERENCES?|REFERENCE LIST|BIBLIOGRAPHY|LITERATURE CITED|WORKS CITED)\s*$', re.IGNORECASE)
     start_index, header_found = 0, False
     for i, p in enumerate(all_paragraphs):
         if header_regex.match(p):
             start_index, header_found = i + 1, True
             print(f" -> Found Reference Section header. Processing subsequent text.")
             break
-    if not header_found: print(" -> No 'References' header found. Assuming file is just a list.")
+            
+    if not header_found: 
+        print(" -> No 'References' header found. Scanning entire document from the top.")
 
-    paragraphs_to_check = all_paragraphs[start_index:]
+    # --- SMARTER FILTER: Stop at Figure Legends, but only if we found the header! ---
+    paragraphs_to_check = []
+    for p in all_paragraphs[start_index:]:
+        if POST_REF_PATTERN.match(p):
+            # Only abort if we found the header OR if we've already collected a few references safely
+            if header_found or len(paragraphs_to_check) > 5:
+                print(f" -> Hit trailing section boundary: '{p[:30]}...'. Stopping scan.")
+                break
+        paragraphs_to_check.append(p)
+
     pmid_pattern = re.compile(r'PMID:?\s*(\d+)', re.IGNORECASE)
-    
-    # NEW DOI PATTERN: Supports <, >, and brackets used in Wiley/SICI DOIs
     doi_pattern = re.compile(r'\b(10\.\d{4,9}/[-._;()/:a-zA-Z0-9<>\[\]]+)')
 
     items_to_process = []
@@ -342,7 +357,7 @@ def save_outputs(csv_data, txt_lines, bib_entries, base_name):
         
     print(f"\nSuccess! Saved outputs:")
     print(f"  [Report] -> {csv_name}")
-    print(f"  [BibTeX] -> {bib_name}  <-- USE THIS FOR arm-verify")
+    print(f"  [BibTeX] -> {bib_name}  <-- USE THIS FOR verify_bib_r3.py")
 
 def main():
     parser = argparse.ArgumentParser(description="Scan docx, output reports and a mapped .bib file.")
@@ -350,8 +365,10 @@ def main():
     args = parser.parse_args()
     fname = args.file
 
-    if not fname: fname = input("Enter filename (.docx): ").strip().strip('"').strip("'")
-    if not fname or not os.path.exists(fname): sys.exit(1)
+    if not fname: 
+        fname = input("Enter filename (.docx): ").strip().strip('"').strip("'")
+    if not fname or not os.path.exists(fname): 
+        sys.exit(1)
 
     base = re.split(r'[ _]', os.path.splitext(os.path.basename(fname))[0])[0] or "scan"
     c, t, b = analyze_document(fname)

@@ -1,14 +1,15 @@
-# Manuscript Reference Toolkit ARM (Another Reference Manager v1-Revision 5)
+# Manuscript Reference Toolkit ARM (Another Reference Manager v1-Revision 8)
 
 ![Python Version](https://img.shields.io/badge/python-3.x-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 A comprehensive Python toolkit designed to extract, verify, correct, and format references in research manuscripts. 
 
-This **Revision 5** toolkit bridges the gap between rough drafts (which often contain raw references, incomplete metadata, or AI hallucinations) and a **finalized, submission-ready Word document**. It features a new **Universal CSL Formatting Engine**, an **Author-Year Bridge** (allowing you to draft with `(Author, Year)` and automatically convert to numeric formats if needed), and intelligent text-replacement algorithms that preserve your document's native fonts and formatting.
+This toolkit bridges the gap between rough drafts (which often contain raw references, incomplete metadata, or AI hallucinations) and a **finalized, submission-ready Word document**. It features a new **Universal CSL Formatting Engine**, an **Author-Year Bridge** (allowing you to draft with `(Author, Year)` and automatically convert to numeric formats if needed), and intelligent text-replacement algorithms that preserve your document's native fonts and formatting.
 
-## Key Features (r5 Updates)
+## Key Features
 
 *   **Universal CSL Engine:** Powered by `citeproc-py`, simply provide any Citation Style Language (`.csl`) file (e.g., from the Zotero repository) to format your manuscript exactly to specific journal requirements (e.g., Nature, Cell, APA).
+*   **Deep XML Extraction:** Bypasses `python-docx` limitations by using raw XPath queries. Flawlessly finds references trapped inside hidden Word tables, Structured Document Tags (SDTs), and handles tracked insertions seamlessly across Windows, macOS, and Ubuntu.
 *   **The Author-Year Bridge:** Draft naturally with `(Smith, 2024)` in text. The pipeline will fuzzy-match the authors to your bibliography and dynamically convert them to whatever your CSL demands (e.g., converting to `1–3` superscripts).
 *   **MDPI & Online Journal Preprocessor:** Automatically algebraic-extracts article numbers from DOIs (e.g., isolating `903` from `genes15070903`) to guarantee modern online journals print with correct page numbers.
 *   **Smart Bibliography Placement & Pagination:** Automatically detects trailing sections (like "Figure Legends" or "Tables") and perfectly inserts the formatted References in between the main text and trailing sections with clean page breaks.
@@ -64,6 +65,18 @@ This automatically installs all required dependencies (`bibtexparser`, `python-d
 | `arm-apply` | Apply CSL formatting to the Word document |
 | `arm-add-dois` | Append missing DOIs to an intermediate draft |
 | `arm-report` | Generate a plain-text reference list from a `.bib` |
+
+---
+
+## ⚠️ CRUCIAL PREPARATION: Flatten Your Document
+
+If your manuscript was drafted using a reference manager (Mendeley, EndNote, Zotero) or has heavily tracked changes, **you MUST prepare the document before running the toolkit.**
+
+1.  **Accept All Changes:** Injecting new bibliographies into heavily tracked XML elements can corrupt Word documents. Go to the "Review" tab in Word and select **Accept All Changes**.
+2.  **Flatten Locked Fields:** Reference managers lock citations inside invisible XML force-fields that prevent scripts from editing them. To instantly convert them into readable plain text:
+    *   **Windows / Linux:** Open the document, press `Ctrl + A` (Select All), then press `Ctrl + Shift + F9` (or `Ctrl + Shift + Fn + F9` on some laptops).
+    *   **Mac:** Open the document, press `Cmd + A` (Select All), then press `Cmd + 6` (or `Cmd + Shift + Fn + F9`).
+3.  **Save the clean copy** and run the toolkit on this file!
 
 ---
 

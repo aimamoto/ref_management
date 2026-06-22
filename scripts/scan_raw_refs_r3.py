@@ -16,6 +16,9 @@ Entrez.api_key = os.environ.get("NCBI_API_KEY", None)
 if Entrez.api_key is None:
     print("Tip: Set NCBI_API_KEY environment variable to avoid request limits.", file=sys.stderr)
 
+# --- POST-REFERENCE BOUNDARY ---
+POST_REF_PATTERN = re.compile(r'^\s*(?:Tables?|Figures?|Figure Legends?|Supplementary.*?|Appendices|Data Availability|Acknowledgements?|Author Contributions?|Funding|Conflict(?:s)? of Interest|Competing Interests?|(?:Table|Figure|Fig\.?)\s*\d+.*)$', re.IGNORECASE)
+
 # --- HELPERS ---
 def clean_word(word):
     return re.sub(r'[^\w]', '', word)
@@ -74,18 +77,15 @@ def extract_citation_parts(text):
         raw_year = selected_year_match.group(0)
         data["year"] = re.sub(r'[a-z]', '', raw_year)
         
-        # Determine if Author-Year or Vancouver style based on Year placement
         if selected_year_match.start() > len(text) / 2:
             snippet = text[:selected_year_match.start()].strip()
         else:
             snippet = text[selected_year_match.end():].strip()
             
-        # URL/DOI Scrubber (Prevents them from leaking into the Title)
         snippet = re.sub(r'(?i)https?://\S+', '', snippet)
         snippet = re.sub(r'(?i)doi:?\s*10\.\d{4,9}/[-._;()/:a-zA-Z0-9<>\[\]]+', '', snippet)
         data["title_snippet"] = re.sub(r'^[\s\)\.,:;-]+|[\s\.,:;-]+$', '', snippet)
         
-        # Improved Raw Author Parsing
         author_raw = text[:selected_year_match.start()].split('.')[0].strip()
         author_raw = re.sub(r'^\[?\d+\]?\s*', '', author_raw) 
         if len(author_raw) > 3:
@@ -215,10 +215,15 @@ def analyze_document(file_path):
             break
     if not header_found: print(" -> No 'References' header found. Assuming file is just a list.")
 
-    paragraphs_to_check = all_paragraphs[start_index:]
+    # --- NEW: Filter out post-reference sections like Figure Legends ---
+    paragraphs_to_check = []
+    for p in all_paragraphs[start_index:]:
+        if POST_REF_PATTERN.match(p):
+            print(f" -> Hit trailing section boundary: '{p[:30]}...'. Stopping scan.")
+            break
+        paragraphs_to_check.append(p)
+
     pmid_pattern = re.compile(r'PMID:?\s*(\d+)', re.IGNORECASE)
-    
-    # NEW DOI PATTERN: Supports <, >, and brackets used in Wiley/SICI DOIs
     doi_pattern = re.compile(r'\b(10\.\d{4,9}/[-._;()/:a-zA-Z0-9<>\[\]]+)')
 
     items_to_process = []
