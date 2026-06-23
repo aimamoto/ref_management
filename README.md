@@ -1,4 +1,4 @@
-# Manuscript Reference Toolkit ARM (Another Reference Manager v1-Revision 8)
+# Manuscript Reference Toolkit ARM (Another Reference Manager v1.1.0)
 
 ![Python Version](https://img.shields.io/badge/python-3.x-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -65,6 +65,7 @@ This automatically installs all required dependencies (`bibtexparser`, `python-d
 | `arm-apply` | Apply CSL formatting to the Word document |
 | `arm-add-dois` | Append missing DOIs to an intermediate draft |
 | `arm-report` | Generate a plain-text reference list from a `.bib` |
+| `arm-diff` | Compare two manuscript `.docx` files; outputs an annotated diff document |
 
 ---
 
@@ -148,7 +149,22 @@ arm-add-dois "MyDraft_extracted_verified.bib" "MyDraft.docx"
 ```
 *   **Output:** `MyDraft_with_DOIs.docx` (Your original draft, with `https://doi.org/...` seamlessly appended to references that were missing it).
 
-### 2. Generate a Text Report
+### 2. Compare Two Manuscript Versions
+Use `arm-diff` to generate an annotated `.docx` showing word-level additions (green highlight) and deletions (red strikethrough) between two drafts:
+```bash
+arm-diff "Original.docx" "Revised.docx"
+```
+Three comparison scopes are available interactively, or via `--mode`:
+
+| Mode | Description |
+| :--- | :--- |
+| `main` *(default)* | Main text only — stops before the References section |
+| `main-no-citations` | Main text with in-text citations stripped before diffing |
+| `full` | Entire document including References and all trailing sections |
+
+*   **Output:** `Revised_comparison.docx` — paragraph structure is preserved; one-to-one paragraph changes show inline word diffs, while restructured blocks show deleted paragraphs followed by added ones.
+
+### 3. Generate a Text Report
 If you just want a clean text file of your references (without modifying a Word document), you can use the reporter command on any verified `.bib` file:
 ```bash
 arm-report "MyDraft_extracted_verified.bib"
@@ -167,6 +183,7 @@ arm-report "MyDraft_extracted_verified.bib"
 | **`arm-apply`** | **The CSL Formatter:** Updates inline citations, protects math/fonts, and smartly paginates the Bibliography. |
 | **`arm-add-dois`** | **The Linker:** Appends DOIs to raw reference lists for intermediate co-author drafts. |
 | **`arm-report`** | **The Reporter:** Converts `.bib` files into clean `.txt` lists. |
+| **`arm-diff`** | **The Comparator:** Generates a word-level annotated diff between two `.docx` manuscript versions. |
 
 ---
 
