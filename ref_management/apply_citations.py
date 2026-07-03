@@ -17,20 +17,60 @@ if not hasattr(pyparsing, 'DelimitedList'):
     if hasattr(pyparsing, 'delimited_list'): setattr(pyparsing, 'DelimitedList', pyparsing.delimited_list)
     elif hasattr(pyparsing, 'delimitedList'): setattr(pyparsing, 'DelimitedList', pyparsing.delimitedList)
 
-import bibtexparser
-from bibtexparser.bwriter import BibTexWriter
-from docx import Document
-from docx.text.paragraph import Paragraph
-from docx.table import Table
-from docx.oxml.text.paragraph import CT_P
-from docx.oxml.table import CT_Tbl
-from rapidfuzz import fuzz
+# --- MONKEY PATCHES FOR CITEPROC-PY ENGINE CRASHES ---
+try:
+    # Fix 1: UnboundLocalError during author name parsing (comma lists without 'and')
+    import citeproc.source.bibtex.bibtex as citeproc_bibtex
+    _orig_parse_name = citeproc_bibtex.parse_name
+    def _robust_parse_name(name):
+        try:
+            return _orig_parse_name(name)
+        except UnboundLocalError:
+            clean_name = name.replace(',', ' ')
+            try:
+                return _orig_parse_name(clean_name)
+            except Exception:
+                return (None, None, name, None)
+        except Exception:
+            return (None, None, name, None)
+    citeproc_bibtex.parse_name = _robust_parse_name
+except Exception:
+    pass
+
+try:
+    # Fix 2: UnboundLocalError during complex page range formatting (e.g. 3587.e29)
+    import citeproc.model as cp_model
+    # Dynamically find and patch any class containing '_format_last_page' (e.g., cp_model.Number)
+    for name, obj in vars(cp_model).items():
+        if isinstance(obj, type) and hasattr(obj, '_format_last_page'):
+            _orig_format = getattr(obj, '_format_last_page')
+            
+            def make_robust_formatter(orig_func):
+                def _robust_format_last_page(self, first, last, *args, **kwargs):
+                    try:
+                        return orig_func(self, first, last, *args, **kwargs)
+                    except UnboundLocalError:
+                        return last  # Fallback to raw page number
+                    except Exception:
+                        return last
+                return _robust_format_last_page
+                
+            setattr(obj, '_format_last_page', make_robust_formatter(_orig_format))
+except Exception:
+    pass
+
 
 # --- CITEPROC IMPORTS ---
 from citeproc import CitationStylesStyle, CitationStylesBibliography
 from citeproc import Citation, CitationItem
 from citeproc import formatter
 from citeproc.source.bibtex import BibTeX
+from docx import Document
+from docx.text.paragraph import Paragraph
+from docx.table import Table
+from docx.oxml.text.paragraph import CT_P
+from docx.oxml.table import CT_Tbl
+from rapidfuzz import fuzz
 
 # --- INTELLIGENCE DICTIONARIES ---
 AA_LIST_3 = "Ala|Arg|Asn|Asp|Cys|Gln|Glu|Gly|His|Ile|Leu|Lys|Met|Phe|Pro|Ser|Thr|Trp|Tyr|Val"
@@ -56,11 +96,9 @@ class CSLCitationManager:
         
         print(f"Loading Bibliography Data and CSL style ({csl_file.name})...")
         
-        # Load the corrected BibTeX directly from the verified file!
         self.bib_source = BibTeX(str(self.bib_file), encoding='utf-8')
         self.bib_style = CitationStylesStyle(str(self.csl_file))
         
-        # --- Dependent CSL Style Check ---
         if getattr(self.bib_style.root, 'citation', None) is None:
             parent_link = None
             try:
@@ -77,20 +115,16 @@ class CSLCitationManager:
             
         self.bibliography = CitationStylesBibliography(self.bib_style, self.bib_source, formatter.html)
         
-        # --- Auto-detect if the CSL file demands superscripts ---
         self.is_superscript_style = False
         try:
             with open(self.csl_file, 'r', encoding='utf-8') as f:
                 csl_text = f.read()
-                # Checks if the style natively asks for superscripts
                 if re.search(r'vertical-align\s*=\s*[\'"]sup[\'"]', csl_text, re.IGNORECASE):
                     self.is_superscript_style = True
-                # Bulletproof fallback for the major journals
                 elif any(x in str(self.csl_file).lower() for x in ['cell', 'nature', 'lancet', 'science']):
                     self.is_superscript_style = True
         except Exception: pass
 
-        # --- Build Indices for Numeric and Author-Year Matching ---
         self.id_map: Dict[int, str] = {}
         self.ay_map: List[Dict[str, str]] = []
         
@@ -119,7 +153,6 @@ class CSLCitationManager:
         formatted_str = html.unescape(str(formatted_cite)).replace('\u200b', '').replace('\u200c', '').strip()
         clean_text = re.sub(r'<[^>]+>', '', formatted_str).strip()
         
-        # Ghost-Proof Numeric Extractor
         nums_raw = re.findall(r'\d+', clean_text)
         alpha_chars = re.sub(r'[^A-Za-z]', '', clean_text)
         is_numeric_style = bool(nums_raw) and len(alpha_chars) < 3
@@ -191,7 +224,6 @@ def replace_text_preserve_formatting(para: Paragraph, pattern: re.Pattern, callb
             run_end.text = run_end.text[end_c_idx + 1:]
 
 def apply_html_formatting_to_runs(para: Paragraph):
-    """Scans native Word runs for HTML tags, splits the run, and applies formatting natively using explicit property setters."""
     tag_pattern = re.compile(r'(</?(?:i|em|b|strong|sup|sub|span)[^>]*>)', re.IGNORECASE)
     runs = list(para.runs)
     
@@ -227,11 +259,9 @@ def apply_html_formatting_to_runs(para: Paragraph):
                 elif part_lower.startswith('</span'): is_sc = False
             else:
                 new_run = para.add_run(part)
-                # Ensure the new run inherits the specific paragraph character style (if any)
                 if run.style: 
                     new_run.style = run.style
                     
-                # Explicit property setting completely bypasses the python-docx chaining bug
                 if is_i is not None: new_run.font.italic = is_i
                 if is_b is not None: new_run.font.bold = is_b
                 if is_sup is not None: new_run.font.superscript = is_sup
@@ -248,8 +278,6 @@ def process_paragraph_content(para: Paragraph, manager: CSLCitationManager, cita
     preceding_text = ""
     for run in para.runs:
         text = run.text.strip()
-        
-        # Convert native Word superscripts (e.g., ^1,2,3) to [1,2,3] unconditionally so the citation engine catches them
         if in_main_body and run.font.superscript and re.match(r'^[\d,\s\-–]+$', text):
             is_math_power = bool(POWER_PATTERN.search(preceding_text)) and text.isdigit()
             if not (AA_PATTERN_3.search(preceding_text) or AA_PATTERN_1.search(preceding_text) or MATH_UNIT_PATTERN.search(preceding_text) or IGNORE_PREFIXES.search(preceding_text) or is_math_power):
@@ -326,8 +354,6 @@ def process_paragraph_content(para: Paragraph, manager: CSLCitationManager, cita
         return match.group(0)
 
     replace_text_preserve_formatting(para, ay_pattern, replace_ay_callback)
-    
-    # Process html tags into Word document natively
     apply_html_formatting_to_runs(para)
 
 def write_rich_bibliography_entry(doc: Document, html_text: str, main_font: Optional[str], insert_cursor: Optional[Paragraph] = None):
@@ -440,7 +466,6 @@ def process_document(docx_path: Path, output_path: Path, manager: CSLCitationMan
     doc.save(str(output_path))
     print(f"Success! Saved to {output_path.name}")
     print(f" -> Tracked and dynamically updated {manager.update_count} in-text citations.")
-
 
 def main():
     parser = argparse.ArgumentParser()

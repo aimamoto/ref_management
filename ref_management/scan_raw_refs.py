@@ -5,6 +5,7 @@ import sys
 import argparse
 import time
 import requests
+import unicodedata
 from docx import Document
 from Bio import Entrez
 from rapidfuzz import fuzz
@@ -20,13 +21,36 @@ if Entrez.api_key is None:
 POST_REF_PATTERN = re.compile(r'^\s*(?:Tables?|Figures?|Figure Legends?|Supplementary.*?|Appendices|Data Availability|Acknowledgements?|Author Contributions?|Funding|Conflict(?:s)? of Interest|Competing Interests?|(?:Table|Figure|Fig\.?)\s*\d+.*)$', re.IGNORECASE)
 
 # --- HELPERS ---
+def safe_entrez_call(func, *args, **kwargs):
+    """Respects NCBI Entrez rate limits by dynamically throttling requests."""
+    if not Entrez.api_key:
+        time.sleep(0.35)
+    else:
+        time.sleep(0.1)
+    return func(*args, **kwargs)
+
 def clean_word(word):
     return re.sub(r'[^\w]', '', word)
+
+def strip_accents(s: str) -> str:
+    """Removes accents/diacritics from text (e.g., Révillion -> Revillion)."""
+    if not s: return ""
+    return ''.join(c for c in unicodedata.normalize('NFD', str(s)) if unicodedata.category(c) != 'Mn')
+
+def clean_for_ratio(text: str) -> str:
+    """Normalizes titles by stripping tags, punctuation, and separating hyphens to preserve terms."""
+    if not text:
+        return ""
+    text = str(text).replace('{', '').replace('}', '')
+    text = re.sub(r'<[^>]+>', '', text)
+    text = text.replace('-', ' ').replace('–', ' ').replace('/', ' ')
+    text = strip_accents(text)
+    return re.sub(r'[^\w\s]', '', text.lower()).strip()
 
 def resolve_doi_to_pmid(doi):
     try:
         clean = doi.rstrip('.').strip()
-        handle = Entrez.esearch(db="pubmed", term=f"{clean}[DOI]", retmax=1)
+        handle = safe_entrez_call(Entrez.esearch, db="pubmed", term=f"{clean}[DOI]", retmax=1)
         r = Entrez.read(handle)
         handle.close()
         return r['IdList'][0] if r['IdList'] else None
@@ -34,7 +58,6 @@ def resolve_doi_to_pmid(doi):
         return None
 
 def resolve_doi_crossref(doi):
-    """Fallback for DOIs not indexed in PubMed (e.g. Stats journals, old issues)."""
     print(f"      ...PubMed missed {doi}. Checking Crossref Master Database...", end='\r')
     try:
         clean = doi.rstrip('.').strip()
@@ -63,38 +86,155 @@ def resolve_doi_crossref(doi):
         pass
     return None
 
-def extract_citation_parts(text):
-    data = {"year": "", "author": "", "title_snippet": ""}
-    year_iter = list(re.finditer(r'\b(19|20)\d{2}[a-z]?\b', text))
+def clean_author_field(author_str: str) -> str:
+    if not author_str:
+        return "Unknown"
+    author_str = re.sub(r'^\[?\d+\]?\s*', '', author_str).strip()
+    author_str = re.sub(r'\s+&\s+', ' and ', author_str)
     
-    if year_iter:
-        selected_year_match = year_iter[0]
-        for m in year_iter:
-            if m.start() > 0 and text[m.start()-1] == '(':
-                selected_year_match = m
-                break
+    if ' and ' in author_str:
+        parts = [p.strip() for p in author_str.split(' and ') if p.strip()]
+    else:
+        raw_parts = [p.strip() for p in author_str.split(',') if p.strip()]
+        parts = []
+        is_paired = False
+        if len(raw_parts) > 1:
+            second_part_clean = re.sub(r'[.\s]', '', raw_parts[1])
+            if len(second_part_clean) <= 3 and second_part_clean.isalpha():
+                is_paired = True
                 
-        raw_year = selected_year_match.group(0)
-        data["year"] = re.sub(r'[a-z]', '', raw_year)
-        
-        if selected_year_match.start() > len(text) / 2:
-            snippet = text[:selected_year_match.start()].strip()
+        if is_paired:
+            for idx in range(0, len(raw_parts), 2):
+                if idx + 1 < len(raw_parts):
+                    parts.append(f"{raw_parts[idx]}, {raw_parts[idx+1]}")
+                else:
+                    parts.append(raw_parts[idx])
         else:
-            snippet = text[selected_year_match.end():].strip()
+            parts = raw_parts
             
-        snippet = re.sub(r'(?i)https?://\S+', '', snippet)
-        snippet = re.sub(r'(?i)doi:?\s*10\.\d{4,9}/[-._;()/:a-zA-Z0-9<>\[\]]+', '', snippet)
-        data["title_snippet"] = re.sub(r'^[\s\)\.,:;-]+|[\s\.,:;-]+$', '', snippet)
+    clean_parts = []
+    for p in parts:
+        p_clean = p.strip()
+        if p_clean:
+            clean_parts.append(p_clean)
+            
+    if not clean_parts:
+        return "Unknown"
+    return " and ".join(clean_parts)
+
+def get_author_surname(author_str: str) -> str:
+    if not author_str:
+        return ""
+    author_str = re.sub(r'^\[?\d+\]?\s*', '', author_str.strip())
+    first_block = author_str.split(',')[0].split(' and ')[0].strip()
+    words = [re.sub(r'[^\w]', '', w) for w in first_block.split()]
+    valid_words = [w for w in words if len(w) > 1 and w.lower() not in ['jr', 'sr', 'iii', 'ii']]
+    if valid_words:
+        return strip_accents(max(valid_words, key=len))
+    return strip_accents(first_block[:10].strip())
+
+def verify_match_precision(draft_title: str, fetched_title: str, draft_author: str, fetched_first_author: str) -> bool:
+    title_score = fuzz.ratio(clean_for_ratio(draft_title), clean_for_ratio(fetched_title))
+    if title_score < 75:
+        return False
+    if draft_author and fetched_first_author:
+        draft_surname = get_author_surname(draft_author)
+        fetched_surname = get_author_surname(fetched_first_author)
+        if draft_surname and fetched_surname:
+            author_score = fuzz.ratio(clean_for_ratio(draft_surname), clean_for_ratio(fetched_surname))
+            if author_score < 60:
+                return False
+    return True
+
+def find_publication_year(text: str):
+    candidates = list(re.finditer(r'\b((?:19|20)\d{2})[a-z]?\b', text))
+    if not candidates:
+        return None
         
-        author_raw = text[:selected_year_match.start()].split('.')[0].strip()
-        author_raw = re.sub(r'^\[?\d+\]?\s*', '', author_raw) 
+    best_candidate = None
+    best_score = -9999
+    
+    for m in candidates:
+        year_val = int(m.group(1))
+        if not (1850 <= year_val <= 2028):
+            continue
+            
+        score = 0
+        start_idx = m.start()
+        end_idx = m.end()
+        
+        has_left_paren = start_idx > 0 and text[start_idx - 1] in '(['
+        has_right_paren = end_idx < len(text) and text[end_idx] in ')]'
+        if has_left_paren and has_right_paren:
+            score += 150
+        elif has_left_paren or has_right_paren:
+            score += 50
+            
+        prefix = text[max(0, start_idx-2):start_idx]
+        suffix = text[end_idx:end_idx+2]
+        if re.search(r'[\s,;:\.]', prefix): score += 10
+        if re.search(r'[\s,;:\.]', suffix): score += 10
+            
+        char_before = text[start_idx-1] if start_idx > 0 else ''
+        char_after = text[end_idx] if end_idx < len(text) else ''
+        if char_before in '-–' or char_after in '-–': score -= 100
+        if re.match(r'^(?:bp|kb|mb|hz|rpm|g|v|c|s|h|d|m|nm|um|mm|cm)\b', suffix, re.IGNORECASE): score -= 80
+
+        rel_pos = start_idx / len(text)
+        if rel_pos < 0.40: score += 20
+        elif rel_pos > 0.75: score += 30
+            
+        if score > best_score:
+            best_score = score
+            best_candidate = m
+            
+    return best_candidate
+
+def extract_citation_parts(text: str) -> dict:
+    data = {"year": "", "author": "", "title_snippet": ""}
+    year_match = find_publication_year(text)
+    
+    if year_match:
+        data["year"] = year_match.group(1)
+        start_idx = year_match.start()
+        end_idx = year_match.end()
+        
+        rel_pos = start_idx / len(text)
+        is_near_front = (rel_pos < 0.4) or (start_idx > 0 and text[start_idx - 1] in '([')
+        
+        if is_near_front:
+            author_raw = text[:start_idx].strip()
+            snippet = text[end_idx:].strip()
+            snippet = re.sub(r'(?i)https?://\S+', '', snippet)
+            snippet = re.sub(r'(?i)doi:?\s*10\.\d{4,9}/[-._;()/:a-zA-Z0-9<>\[\]]+', '', snippet)
+            title_candidate = re.split(r'[\.\?\!]\s+(?=[A-Z])', snippet)[0].strip()
+        else:
+            text_before = text[:start_idx].strip()
+            text_before = re.sub(r'(?i)https?://\S+', '', text_before)
+            text_before = re.sub(r'(?i)doi:?\s*10\.\d{4,9}/[-._;()/:a-zA-Z0-9<>\[\]]+', '', text_before)
+            parts = re.split(r'\.\s+', text_before)
+            
+            if len(parts) >= 2:
+                author_raw = parts[0].strip()
+                title_candidate = parts[1].strip()
+            else:
+                author_raw = text_before
+                title_candidate = text_before
+                
+        author_raw = re.sub(r'[\(\[\s,;:-]+$', '', author_raw)
+        author_raw = re.sub(r'^\[?\d+\]?\s*', '', author_raw)
         if len(author_raw) > 3:
             data["author"] = author_raw
+            
+        title_candidate = re.sub(r'^[\s\)\.,:;-]+|[\s\.,:;-]+$', '', title_candidate)
+        data["title_snippet"] = title_candidate
+        
     else:
         snippet = text
         snippet = re.sub(r'(?i)https?://\S+', '', snippet)
         snippet = re.sub(r'(?i)doi:?\s*10\.\d{4,9}/[-._;()/:a-zA-Z0-9<>\[\]]+', '', snippet)
-        data["title_snippet"] = snippet.strip()
+        title_candidate = re.split(r'[\.\?\!]\s+(?=[A-Z])', snippet)[0].strip()
+        data["title_snippet"] = title_candidate.strip()
 
     if not data["author"]:
         skip_words = {'et', 'al', 'in', 'the', 'pmid', 'doi', 'vol', 'no', 'and', '&', 'eds', 'editor', 'page', 'pp', 'references'}
@@ -105,24 +245,36 @@ def extract_citation_parts(text):
             if clean[0].isupper():
                 data["author"] = clean
                 break
-            
+                
     return data
 
 def search_pubmed_by_metadata(parts):
     candidates = []
-    if len(parts["title_snippet"]) > 10:
-        clean_title = re.sub(r'[^\w\s]', '', parts["title_snippet"])
-        short_title = " ".join(clean_title.split()[:8])
-        try:
-            handle = Entrez.esearch(db="pubmed", term=f"{short_title}[Title]", retmax=3)
-            r = Entrez.read(handle)
-            handle.close()
-            if r['IdList']: candidates.extend(r['IdList'])
-        except Exception: pass
+    surname = get_author_surname(parts["author"])
     
-    if not candidates and parts["author"] and parts["year"]:
+    if len(parts["title_snippet"]) > 10:
+        stopwords = {'and', 'in', 'of', 'the', 'for', 'with', 'on', 'at', 'to', 'from', 'by', 'a', 'an', 'is', 'are', 'its'}
+        # Preserve hyphens for genes during API query
+        clean_title = parts["title_snippet"].replace('–', '-').replace('/', ' ')
+        clean_title = re.sub(r'[^\w\s\-]', '', clean_title)
+        
+        # Build strict word-by-word title matching to bypass Boolean keyword interpretation errors
+        words = [w for w in clean_title.split() if w.lower() not in stopwords][:8]
+        if len(words) >= 2:
+            query = " AND ".join(f"{w}[Title]" for w in words)
+            if surname:
+                query += f" AND {surname}[Author]"
+                
+            try:
+                handle = safe_entrez_call(Entrez.esearch, db="pubmed", term=query, retmax=5)
+                r = Entrez.read(handle)
+                handle.close()
+                if r['IdList']: candidates.extend(r['IdList'])
+            except Exception: pass
+    
+    if not candidates and surname and parts["year"]:
         try:
-            handle = Entrez.esearch(db="pubmed", term=f"{parts['author'].split()[0]}[1au] AND {parts['year']}[pdat]", retmax=5)
+            handle = safe_entrez_call(Entrez.esearch, db="pubmed", term=f"{surname}[1au] AND {parts['year']}[pdat]", retmax=5)
             r = Entrez.read(handle)
             handle.close()
             if r['IdList']: candidates.extend(r['IdList'])
@@ -142,6 +294,8 @@ def parse_record(record):
         if aid[0] == 'doi': doi = aid[1]
     if not doi and 'doi' in record.get('ArticleIds', {}):
         doi = record['ArticleIds']['doi']
+    if not doi and record.get('DOI'):
+        doi = record['DOI']
 
     return {
         "id": str(record.get('Id')),
@@ -161,14 +315,13 @@ def batch_fetch_pubmed(pmid_list):
     for i in range(0, len(unique_pmids), 200):
         chunk = unique_pmids[i : i + 200]
         try:
-            handle = Entrez.esummary(db="pubmed", id=",".join(chunk), retmode="xml")
+            handle = safe_entrez_call(Entrez.esummary, db="pubmed", id=",".join(chunk), retmode="xml")
             records = Entrez.read(handle)
             handle.close()
             for record in records:
                 data = parse_record(record)
                 fetched_data[data['id']] = data
-            time.sleep(0.5) 
-        except Exception as e:
+        except Exception:
             pass
             
     return fetched_data
@@ -182,10 +335,7 @@ def analyze_document(file_path):
     try:
         if ext == '.docx':
             doc = Document(file_path)
-            # --- ULTIMATE EXTRACTION: Penetrates SDT boxes, Tables, and Track Changes! ---
-            # Finds every single paragraph XML node (<w:p>) anywhere in the document
             for p_node in doc.element.body.xpath('.//w:p'):
-                # Extracts text (<w:t>) while safely ignoring deleted Track Changes
                 text = "".join(node.text for node in p_node.xpath('.//w:t') if node.text).strip()
                 if text: 
                     all_paragraphs.append(text)
@@ -223,11 +373,9 @@ def analyze_document(file_path):
     if not header_found: 
         print(" -> No 'References' header found. Scanning entire document from the top.")
 
-    # --- SMARTER FILTER: Stop at Figure Legends, but only if we found the header! ---
     paragraphs_to_check = []
     for p in all_paragraphs[start_index:]:
         if POST_REF_PATTERN.match(p):
-            # Only abort if we found the header OR if we've already collected a few references safely
             if header_found or len(paragraphs_to_check) > 5:
                 print(f" -> Hit trailing section boundary: '{p[:30]}...'. Stopping scan.")
                 break
@@ -278,16 +426,18 @@ def analyze_document(file_path):
                 else:
                     entry["status"] = "FAIL_DOI_LOOKUP"
         else:
-            if re.search(r'\b(19|20)\d{2}[a-z]?\b', text):
+            year_match = find_publication_year(text)
+            if year_match:
                 parts = extract_citation_parts(text)
                 candidates = search_pubmed_by_metadata(parts)
                 best_match, best_score = None, 0
                 if candidates:
                     cand_meta = batch_fetch_pubmed(candidates)
                     for c_id, c_data in cand_meta.items():
-                        score = fuzz.token_set_ratio(c_data['title'], parts['title_snippet'])
-                        if score > 80 and score > best_score:
-                            best_score, best_match = score, c_id
+                        if verify_match_precision(parts['title_snippet'], c_data['title'], parts['author'], c_data['first_author']):
+                            score = fuzz.ratio(clean_for_ratio(c_data['title']), clean_for_ratio(parts['title_snippet']))
+                            if score > best_score:
+                                best_score, best_match = score, c_id
                 if best_match:
                     entry["target_pmid"] = best_match
                     entry["action_log"].append("Found via Search")
@@ -307,17 +457,11 @@ def analyze_document(file_path):
             if item['status'] == "FAIL_DOI_LOOKUP": 
                 status, _ = "MANUAL_CHECK", notes.append("DOI not in PubMed/Crossref")
             else: 
-                status, display_id = ("NOT_FOUND", "UNKNOWN") if re.search(r'\b(19|20)\d{2}\b', text) else ("IGNORED", display_id)
+                year_match = find_publication_year(text)
+                status, display_id = ("NOT_FOUND", "UNKNOWN") if year_match else ("IGNORED", display_id)
         else:
-            title_clean = re.sub(r'[^\w\s]', '', meta['title'].lower())
-            text_clean = re.sub(r'[^\w\s]', '', text.lower())
-            title_score = fuzz.partial_ratio(title_clean, text_clean)
-            
             if meta['is_retracted']: 
                 status = "!! RETRACTED !!"
-            elif "Found via Search" not in str(notes) and "Crossref" not in str(notes):
-                if title_score < 65:
-                    status, _ = "MISMATCH", notes.append(f"Title Score {title_score}")
 
         if status == "IGNORED": continue 
 
@@ -329,11 +473,15 @@ def analyze_document(file_path):
         elif item.get('found_doi'): bib_lines.append(f"  doi = {{{item['found_doi']}}},")
         
         if meta:
-            bib_lines.extend([f"  title = {{{meta['title']}}},", f"  author = {{{meta['first_author']} et al.}},", f"  year = {{{meta['year']}}}"])
+            clean_title = meta['title'].rstrip('.').strip()
+            bib_lines.extend([f"  title = {{{clean_title}}},", f"  author = {{{meta['first_author']} et al.}},", f"  year = {{{meta['year']}}}"])
         else:
             parts = extract_citation_parts(text)
-            bib_lines.append(f"  title = {{{parts['title_snippet']}}},")
-            if parts['author']: bib_lines.append(f"  author = {{{parts['author']}}},")
+            clean_title = parts['title_snippet'].rstrip('.').strip()
+            bib_lines.append(f"  title = {{{clean_title}}},")
+            if parts['author']: 
+                cleaned_author = clean_author_field(parts['author'])
+                bib_lines.append(f"  author = {{{cleaned_author}}},")
             if parts['year']: bib_lines.append(f"  year = {{{parts['year']}}}")
         bib_lines.append("}")
         bib_entries.append("\n".join(bib_lines))
@@ -357,7 +505,7 @@ def save_outputs(csv_data, txt_lines, bib_entries, base_name):
         
     print(f"\nSuccess! Saved outputs:")
     print(f"  [Report] -> {csv_name}")
-    print(f"  [BibTeX] -> {bib_name}  <-- USE THIS FOR verify_bib_r3.py")
+    print(f"  [BibTeX] -> {bib_name}  <-- USE THIS FOR verify_bib.py")
 
 def main():
     parser = argparse.ArgumentParser(description="Scan docx, output reports and a mapped .bib file.")

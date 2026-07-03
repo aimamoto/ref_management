@@ -1,3 +1,3 @@
 """ref_management – Manuscript Reference Toolkit (ARM)."""
 
-__version__ = "1.0.0"
+__version__ = "1.1.2"

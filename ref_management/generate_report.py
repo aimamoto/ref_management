@@ -138,7 +138,7 @@ def process_bib(input_file: Path, output_file: Path, style: str):
         print(f"I/O Error: {e}")
         sys.exit(1)
 
-def main():
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path, nargs='?', default=None)
@@ -165,6 +165,3 @@ def main():
         args.output = args.input.with_name(f"{args.input.stem}_list_{active_style}.txt")
         
     process_bib(args.input, args.output, active_style)
-
-if __name__ == "__main__":
-    main()

@@ -5,16 +5,39 @@ import argparse
 import re
 from pathlib import Path
 
+try:
+    from ref_management import __version__
+except ImportError:
+    __version__ = "Unknown"
+
 def main():
-    parser = argparse.ArgumentParser(description="Another Reference Manager (ARM)")
+    epilog_text = """
+Available ARM Commands:
+-------------------------------------------------------------------------
+  arm-format   : Run the complete pipeline (scan -> verify -> apply)
+  arm-scan     : Extract raw references from a document into a .bib file
+  arm-verify   : Enrich and verify a .bib file using PubMed/Crossref
+  arm-apply    : Apply a CSL style and bibliography to your document
+  arm-add-dois : Append DOIs to an intermediate draft without reformatting
+  arm-report   : Generate a plain-text reference list from a verified .bib
+  arm-diff     : Compare two .docx manuscripts and generate an annotated diff
+-------------------------------------------------------------------------
+"""
+    parser = argparse.ArgumentParser(
+        description="ARM (Another Reference Manager) - Automated Manuscript Formatting Pipeline.",
+        epilog=epilog_text,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("document", type=Path, nargs='?', help="Path to the input .docx file")
     parser.add_argument("--csl", type=Path, help="Path to the desired .csl file")
+    parser.add_argument("-v", "--version", action="version", version=f"ref-management (ARM) v{__version__}")
+    
     args = parser.parse_args()
 
     # 1. Check Input Document
     doc_path = args.document
     if not doc_path:
-        print("\n=== ARM Manuscript Auto-Formatter (Universal CSL Edition) ===")
+        print(f"\n=== ARM Manuscript Auto-Formatter v{__version__} (Universal CSL Edition) ===")
         doc_input = input("Enter the path to your .docx file: ").strip().strip('"').strip("'")
         doc_path = Path(doc_input)
         

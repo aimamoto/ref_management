@@ -2,6 +2,8 @@ import os
 import re
 import argparse
 import sys
+import time
+import unicodedata
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Tuple
 
@@ -25,7 +27,82 @@ Entrez.api_key = os.environ.get("NCBI_API_KEY", None)
 if Entrez.api_key is None:
     print("Tip: Set NCBI_API_KEY environment variable to avoid request limits.", file=sys.stderr)
 
-# --- CLASS DEFINITION ---
+# --- HELPERS ---
+def safe_entrez_call(func, *args, **kwargs):
+    if not Entrez.api_key:
+        time.sleep(0.35)
+    else:
+        time.sleep(0.1)
+    return func(*args, **kwargs)
+
+def strip_accents(s: str) -> str:
+    if not s: return ""
+    return ''.join(c for c in unicodedata.normalize('NFD', str(s)) if unicodedata.category(c) != 'Mn')
+
+def clean_for_ratio(text: str) -> str:
+    if not text: return ""
+    text = str(text)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = text.replace('{', '').replace('}', '')
+    text = text.replace('-', ' ').replace('–', ' ').replace('/', ' ')
+    text = strip_accents(text)
+    return re.sub(r'[^\w\s]', '', text.lower()).strip()
+
+def clean_author_field(author_str: str) -> str:
+    if not author_str: return "Unknown"
+    author_str = re.sub(r'^\[?\d+\]?\s*', '', author_str).strip()
+    author_str = re.sub(r'\s+&\s+', ' and ', author_str)
+    
+    if ' and ' in author_str:
+        parts = [p.strip() for p in author_str.split(' and ') if p.strip()]
+    else:
+        raw_parts = [p.strip() for p in author_str.split(',') if p.strip()]
+        parts = []
+        is_paired = False
+        if len(raw_parts) > 1:
+            second_part_clean = re.sub(r'[.\s]', '', raw_parts[1])
+            if len(second_part_clean) <= 3 and second_part_clean.isalpha():
+                is_paired = True
+                
+        if is_paired:
+            for idx in range(0, len(raw_parts), 2):
+                if idx + 1 < len(raw_parts):
+                    parts.append(f"{raw_parts[idx]}, {raw_parts[idx+1]}")
+                else:
+                    parts.append(raw_parts[idx])
+        else:
+            parts = raw_parts
+            
+    clean_parts = []
+    for p in parts:
+        p_clean = p.strip()
+        if p_clean: clean_parts.append(p_clean)
+            
+    if not clean_parts: return "Unknown"
+    return " and ".join(clean_parts)
+
+def get_author_surname(author_str: str) -> str:
+    if not author_str: return ""
+    author_str = re.sub(r'^\[?\d+\]?\s*', '', author_str.strip())
+    first_block = author_str.split(',')[0].split(' and ')[0].strip()
+    words = [re.sub(r'[^\w]', '', w) for w in first_block.split()]
+    valid_words = [w for w in words if len(w) > 1 and w.lower() not in ['jr', 'sr', 'iii', 'ii']]
+    if valid_words:
+        return strip_accents(max(valid_words, key=len))
+    return strip_accents(first_block[:10].strip())
+
+def verify_match_precision(draft_title: str, fetched_title: str, draft_author: str, fetched_first_author: str) -> bool:
+    title_score = fuzz.ratio(clean_for_ratio(draft_title), clean_for_ratio(fetched_title))
+    if title_score < 80: return False
+        
+    if draft_author and fetched_first_author:
+        draft_surname = get_author_surname(draft_author)
+        fetched_surname = get_author_surname(fetched_first_author)
+        if draft_surname and fetched_surname:
+            author_score = fuzz.ratio(clean_for_ratio(draft_surname), clean_for_ratio(fetched_surname))
+            if author_score < 75: return False
+    return True
+
 class BibTexEnhancer:
     def __init__(self, input_file: Path, output_file: Path):
         self.input_file = input_file
@@ -39,8 +116,7 @@ class BibTexEnhancer:
 
     def clean_text(self, text: Any) -> str:
         if not text: return ""
-        text_str = str(text)
-        text_str = text_str.replace('{', '').replace('}', '')
+        text_str = str(text).replace('{', '').replace('}', '')
         return re.sub(r'\s+', ' ', text_str).strip()
 
     def format_pubmed_authors(self, author_list: List[str]) -> str:
@@ -57,7 +133,6 @@ class BibTexEnhancer:
         return " and ".join(formatted)
 
     def search_crossref_by_doi(self, doi: str) -> Optional[Dict]:
-        """Queries Crossref's master database if PubMed misses a DOI."""
         print(f"      ...Searching Crossref via DOI...", end='', flush=True)
         try:
             url = f"https://api.crossref.org/works/{doi}"
@@ -68,22 +143,25 @@ class BibTexEnhancer:
             pass
         return None
 
-    def search_crossref(self, title: str) -> Optional[Dict]:
+    def search_crossref(self, title: str, author_surname: str = "") -> Optional[List[Dict]]:
         print(f"      ...Searching Crossref...", end='', flush=True)
         try:
             url = "https://api.crossref.org/works"
+            query_str = title
+            if author_surname:
+                query_str += f" {author_surname}"
+                
             params = {
-                "query.title": title, "rows": 1,
+                # Upgraded to query.bibliographic which is far more reliable for exact strings than query.title alone
+                "query.bibliographic": query_str.strip(), 
+                "rows": 3,
                 "select": "DOI,title,author,published-print,published-online,container-title,volume,issue,page"
             }
             resp = requests.get(url, params=params, timeout=5)
             if resp.status_code == 200:
                 data = resp.json()
                 items = data.get('message', {}).get('items', [])
-                if items:
-                    item = items[0]
-                    found_title = item.get('title', [''])[0]
-                    if fuzz.ratio(title.lower(), found_title.lower()) > 80: return item
+                return items
         except requests.RequestException:
             pass
         return None
@@ -115,19 +193,32 @@ class BibTexEnhancer:
         return meta
 
     def search_pubmed(self, entry: Dict[str, str]) -> Tuple[Optional[Dict], str]:
+        draft_title = entry.get('title', '')
+
         if 'pmid' in entry and entry['pmid']:
             clean_pmid = re.sub(r'[^\d]', '', str(entry['pmid']))
             res = self.fetch_details_by_id([clean_pmid])
-            if res: return (res, "pmid")
+            if res:
+                fetched_title = res.get('Title', '')
+                fetched_first = res.get('AuthorList', [None])[0] if res.get('AuthorList') else ""
+                if verify_match_precision(draft_title, fetched_title, entry.get('author', ''), fetched_first):
+                    return (res, "pmid")
 
         if 'doi' in entry and entry['doi']:
             clean_doi = entry['doi'].replace('https://doi.org/', '').strip()
             res = self.fetch_by_doi(clean_doi)
-            if res: return (res, "doi")
+            if res:
+                fetched_title = res.get('Title', '')
+                fetched_first = res.get('AuthorList', [None])[0] if res.get('AuthorList') else ""
+                if verify_match_precision(draft_title, fetched_title, entry.get('author', ''), fetched_first):
+                    return (res, "doi")
             
-            # THE FIX: If PubMed failed, instantly query Crossref with the DOI!
             cr_res = self.search_crossref_by_doi(clean_doi)
-            if cr_res: return (self.convert_crossref_to_meta(cr_res), "crossref_doi")
+            if cr_res:
+                meta = self.convert_crossref_to_meta(cr_res)
+                fetched_first = meta.get('author', '').split(' and ')[0] if meta.get('author') else ""
+                if verify_match_precision(draft_title, meta.get('title', ''), entry.get('author', ''), fetched_first):
+                    return (meta, "crossref_doi")
 
         if 'url' in entry and entry['url']:
             pmc_match = re.search(r'(PMC\d+)', entry['url'])
@@ -135,25 +226,46 @@ class BibTexEnhancer:
                 res = self.fetch_by_term(pmc_match.group(1))
                 if res: return (res, "pmc")
 
-        title = self.clean_text(entry.get('title', ''))
-        title = re.sub(r'https?://\S+', '', title) # Scrub raw URLs out of search query
-        search_title = re.sub(r'[^\w\s]', '', title)
+        title = self.clean_text(draft_title)
+        title = re.sub(r'https?://\S+', '', title)
+        
+        # Fallback split to isolate title if it contains trailing journal/volume info
+        title_clean_parts = re.split(r'[\.\?\!]\s+(?=[A-Z])', title)
+        if title_clean_parts:
+            title = title_clean_parts[0].strip()
 
-        if len(search_title) > 10:
-            query = f"{search_title}[Title]"
+        stopwords = {'and', 'in', 'of', 'the', 'for', 'with', 'on', 'at', 'to', 'from', 'by', 'a', 'an', 'is', 'are', 'its'}
+        clean_title_str = title.replace('–', '-').replace('/', ' ')
+        clean_title_str = re.sub(r'[^\w\s\-]', '', clean_title_str)
+        
+        # Build robust exact word-matching targeting [Title] fields to avoid literal boolean parsing clashes
+        words = [w for w in clean_title_str.split() if w.lower() not in stopwords][:8]
+        
+        if len(words) >= 2:
+            query = " AND ".join(f"{w}[Title]" for w in words)
             author = self.clean_text(entry.get('author', ''))
-            if author: query += f" AND {author.split(',')[0].split(' ')[-1]}[Author]"
+            surname = ""
+            if author:
+                surname = get_author_surname(author)
+                if surname:
+                    query += f" AND {surname}[Author]"
+                    
             res = self.fetch_by_term(query)
             if res: return (res, "pubmed_title")
 
-            cr_res = self.search_crossref(search_title)
-            if cr_res: return (self.convert_crossref_to_meta(cr_res), "crossref")
+            cr_items = self.search_crossref(title, surname)
+            if cr_items:
+                for item in cr_items:
+                    meta = self.convert_crossref_to_meta(item)
+                    fetched_first = meta.get('author', '').split(' and ')[0] if meta.get('author') else ""
+                    if verify_match_precision(draft_title, meta.get('title', ''), entry.get('author', ''), fetched_first):
+                        return (meta, "crossref")
 
         return (None, "fail")
 
     def fetch_by_doi(self, doi: str) -> Optional[Dict]:
         try:
-            handle = Entrez.esearch(db="pubmed", term=f"{doi}[DOI]", retmax=1)
+            handle = safe_entrez_call(Entrez.esearch, db="pubmed", term=f"{doi}[DOI]", retmax=1)
             r = Entrez.read(handle)
             if r['IdList']: return self.fetch_details_by_id(r['IdList'])
         except Exception: pass
@@ -161,7 +273,7 @@ class BibTexEnhancer:
 
     def fetch_by_term(self, term: str) -> Optional[Dict]:
         try:
-            handle = Entrez.esearch(db="pubmed", term=term, retmax=1)
+            handle = safe_entrez_call(Entrez.esearch, db="pubmed", term=term, retmax=1)
             r = Entrez.read(handle)
             if r['IdList']: return self.fetch_details_by_id(r['IdList'])
         except Exception: pass
@@ -169,7 +281,7 @@ class BibTexEnhancer:
 
     def fetch_details_by_id(self, id_list: List[str]) -> Optional[Dict]:
         try:
-            handle = Entrez.esummary(db="pubmed", id=",".join(id_list), retmode="xml")
+            handle = safe_entrez_call(Entrez.esummary, db="pubmed", id=",".join(id_list), retmode="xml")
             records = Entrez.read(handle)
             return records[0] if records else None
         except Exception: return None
@@ -199,7 +311,11 @@ class BibTexEnhancer:
 
                 if 'crossref' in method:
                     if data['doi']: entry['doi'] = data['doi']
-                    entry['title'] = "{" + data['title'] + "}"
+                    
+                    clean_title = data['title'].rstrip('.').strip()
+                    clean_title = re.sub(r'<[^>]+>', '', clean_title)
+                    entry['title'] = "{" + clean_title + "}"
+                    
                     entry['year'] = str(data.get('year', entry.get('year', '')))
                     entry['journal'] = data.get('journal', entry.get('journal', ''))
 
@@ -214,9 +330,19 @@ class BibTexEnhancer:
                         entry['note'] = f"{entry.get('note', '')} [[RETRACTED]]".strip()
                         self.stats['retracted'] += 1
 
-                    if 'doi' in data.get('ArticleIds', {}): entry['doi'] = data['ArticleIds']['doi']
+                    doi_val = ""
+                    if 'doi' in data.get('ArticleIds', {}):
+                        doi_val = data['ArticleIds']['doi']
+                    elif data.get('DOI'):
+                        doi_val = data['DOI']
+                        
+                    if doi_val:
+                        entry['doi'] = doi_val
                     entry['pmid'] = str(data.get('Id', ''))
-                    entry['title'] = "{" + data.get('Title', '') + "}"
+                    
+                    clean_title = data.get('Title', '').rstrip('.').strip()
+                    clean_title = re.sub(r'<[^>]+>', '', clean_title)
+                    entry['title'] = "{" + clean_title + "}"
 
                     if 'AuthorList' in data: entry['author'] = self.format_pubmed_authors(data['AuthorList'])
                     entry['journal'] = data.get('Source', entry.get('journal', ''))
@@ -238,20 +364,20 @@ class BibTexEnhancer:
                 self.stats['failed'] += 1
                 print(" -> [NO MATCH]")
 
-        # =====================================================================
-        # --- NEW: Post-Processor for Modern Online/MDPI Journals ---
         print("\nEnrichment complete. Finalizing formatting...")
         for entry in bib_database.entries:
+            author_val = entry.get('author', '').strip()
+            if author_val and ',' in author_val and ' and ' not in author_val:
+                entry['author'] = clean_author_field(author_val)
+                
             pages_val = entry.get('pages', '').replace('{', '').replace('}', '').strip()
             if not pages_val:
                 num_val = entry.get('number', '').replace('{', '').replace('}', '').strip()
                 final_page = None
                 
-                # If the issue number is abnormally large, it's actually the article number
                 if num_val.isdigit() and int(num_val) > 100:
                     final_page = num_val
                 elif entry.get('doi'):
-                    # Isolate trailing numbers from the DOI algebraically
                     match = re.search(r'(\d+)[a-zA-Z-]*$', entry['doi'].strip())
                     if match:
                         digits = match.group(1)
@@ -266,24 +392,22 @@ class BibTexEnhancer:
                             digits = rem if rem else digits
                         final_page = digits.lstrip('0') or digits
                 
-                # Forcefully populate all CSL variants of "page" so the engine cannot ignore it
                 if final_page:
                     entry['pages'] = final_page
                     entry['eid'] = final_page
                     entry['article-number'] = final_page
-        # =====================================================================
 
-        print("\n" + "=" * 50)
+        print("\n" + "="*50)
+        print("Completed Enrichment Verification")
+        print("\n" + "="*50)
+        
         writer = BibTexWriter()
-        try:
-            with open(self.output_file, 'w', encoding='utf-8') as bibfile:
-                bibfile.write(writer.write(bib_database))
-            print(f"Saved to: {self.output_file}")
-            print(f"Verified via PubMed:   {self.stats['method_pmid'] + self.stats['method_doi'] + self.stats['method_pubmed_title']}")
-            print(f"Verified via Crossref: {self.stats['method_crossref'] + self.stats['method_crossref_doi']}")
-            print(f"No Match:              {self.stats['failed']}")
-        except IOError as e:
-            print(f"Error writing to output file: {e}")
+        with open(self.output_file, 'w', encoding='utf-8') as f:
+            f.write(writer.write(bib_database))
+        print(f"Saved to: {self.output_file}")
+        print(f"Verified via PubMed:   {self.stats['method_pmid'] + self.stats['method_doi'] + self.stats['method_pubmed_title']}")
+        print(f"Verified via Crossref: {self.stats['method_crossref'] + self.stats['method_crossref_doi']}")
+        print(f"No Match:              {self.stats['failed']}")
 
 def main():
     parser = argparse.ArgumentParser()
