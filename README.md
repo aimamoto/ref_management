@@ -1,4 +1,4 @@
-# Manuscript Reference Toolkit ARM (Another Reference Manager v1.1.2)
+# Manuscript Reference Toolkit ARM (Another Reference Manager v1.1.3)
 
 ![Python Version](https://img.shields.io/badge/python-3.x-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -184,6 +184,18 @@ arm-report "MyDraft_extracted_verified.bib"
 | **`arm-add-dois`** | **The Linker:** Appends DOIs to raw reference lists for intermediate co-author drafts. |
 | **`arm-report`** | **The Reporter:** Converts `.bib` files into clean `.txt` lists. |
 | **`arm-diff`** | **The Comparator:** Generates a word-level annotated diff between two `.docx` manuscript versions. |
+
+---
+
+## Changelog
+
+### 1.1.3
+*   **Fixed** an `IndexError` crash in verification/scan when Crossref returned an empty `title`/`container-title` or empty `date-parts` (e.g., books, datasets) — the run no longer aborts mid-way.
+*   **Fixed** `arm-apply` silently **deleting the reference list** when zero in-text citations matched the bibliography. It now warns and leaves the references intact (for narrative author-year drafts, use `arm-add-dois`).
+*   **Fixed** reference title extraction for DOI-less entries: a title is no longer truncated to `)` after a parenthesised year `(YEAR).`, nor does it absorb the journal name after a closing quotation mark (`…domain." Journal, …`).
+*   **Improved** PubMed title-search robustness by expanding the ignored stopword set (e.g., `through`), so common function words tagged as `[Title]` no longer zero out the query.
+*   **Fixed** the verification summary so PubMed-via-PMC matches are counted; totals now reconcile.
+*   Net effect: substantially higher verification recall (internal test manuscript went from 6 unresolved references to 0).
 
 ---
 
