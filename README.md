@@ -1,4 +1,4 @@
-# Manuscript Reference Toolkit ARM (Another Reference Manager v1.1.4)
+# Manuscript Reference Toolkit ARM (Another Reference Manager v1.1.5)
 
 ![Python Version](https://img.shields.io/badge/python-3.x-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -188,6 +188,9 @@ arm-report "MyDraft_extracted_verified.bib"
 ---
 
 ## Changelog
+
+### 1.1.5
+*   **Fixed** silent loss of citations in a multi-work author-year group. A parenthetical was split on `;` and then searched for **one** year per part, so `(Sondhi et al., 1998; Lee et al., 2003, 2006)` matched only Sondhi 1998 and Lee 2003 and rendered as `[5, 6]`, dropping Lee 2006. Worse, the citation still counted as fully resolved — `valid_part_count` and the number of matched keys were both 1 for that part — so the run reported success and nothing warned. Every year in a part is now treated as a citation of its own, and a citation is rendered only if **all** of its years resolve; a partial match is left as written instead of being published with a subset of its works. Note the comma form is only correct when the works share an author list, so a group like this is often a manuscript error too, worth checking rather than relying on the parser.
 
 ### 1.1.4
 *   **Fixed** author-year citation matching, which never worked. The author-year map was built by reading `entry['year']` and string-splitting `entry['author']`, but `citeproc-py` folds the BibTeX year into `issued['year']` and normalises authors into a list of `Name` mappings. The year read was therefore always `None`, the map came out **empty for every document**, and narrative author-year drafts always reported "0 in-text citations matched". Both fields are now read from either the citeproc or the raw-BibTeX shape. On an internal test manuscript this went from 0 to 27 of 27 citations converted.
