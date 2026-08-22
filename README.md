@@ -1,4 +1,4 @@
-# Manuscript Reference Toolkit ARM (Another Reference Manager v1.1.3)
+# Manuscript Reference Toolkit ARM (Another Reference Manager v1.1.4)
 
 ![Python Version](https://img.shields.io/badge/python-3.x-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -73,7 +73,7 @@ This automatically installs all required dependencies (`bibtexparser`, `python-d
 
 If your manuscript was drafted using a reference manager (Mendeley, EndNote, Zotero) or has heavily tracked changes, **you MUST prepare the document before running the toolkit.**
 
-1.  **Accept All Changes:** Injecting new bibliographies into heavily tracked XML elements can corrupt Word documents. Go to the "Review" tab in Word and select **Accept All Changes**.
+1.  **Accept All Changes:** Injecting new bibliographies into heavily tracked XML elements can corrupt Word documents. Go to the "Review" tab in Word and select **Accept All Changes**. This is not only about corruption: text inside a tracked insertion (`w:ins`) is **invisible** to the toolkit, so any citation or DOI you have added but not yet accepted will simply not be seen.
 2.  **Flatten Locked Fields:** Reference managers lock citations inside invisible XML force-fields that prevent scripts from editing them. To instantly convert them into readable plain text:
     *   **Windows / Linux:** Open the document, press `Ctrl + A` (Select All), then press `Ctrl + Shift + F9` (or `Ctrl + Shift + Fn + F9` on some laptops).
     *   **Mac:** Open the document, press `Cmd + A` (Select All), then press `Cmd + 6` (or `Cmd + Shift + Fn + F9`).
@@ -188,6 +188,12 @@ arm-report "MyDraft_extracted_verified.bib"
 ---
 
 ## Changelog
+
+### 1.1.4
+*   **Fixed** author-year citation matching, which never worked. The author-year map was built by reading `entry['year']` and string-splitting `entry['author']`, but `citeproc-py` folds the BibTeX year into `issued['year']` and normalises authors into a list of `Name` mappings. The year read was therefore always `None`, the map came out **empty for every document**, and narrative author-year drafts always reported "0 in-text citations matched". Both fields are now read from either the citeproc or the raw-BibTeX shape. On an internal test manuscript this went from 0 to 27 of 27 citations converted.
+*   **Fixed** a silent corruption of scientific notation. A superscript exponent was only recognised as a math power when the preceding text ended in `10`, so when the minus sign sits *outside* the superscript run — `4×10` + `−` + superscript `132` — the exponent was rewritten as a citation and its superscript stripped, turning `p = 4×10⁻¹³²` into `p = 4×10−[132]`. A sign is now allowed between mantissa and exponent, in any of its Unicode forms.
+*   **Improved** DOI resolution: a DOI carrying reference-manager export junk (e.g. `10.1091/MBC.E11-02-0136;SUBPAGE:STRING:FULL`) no longer misses both lookups and falls through to `MANUAL_CHECK`. The literal DOI is always tried first, so legitimate semicolon-bearing DOIs (many Wiley DOIs end `;2-J`) are unaffected.
+*   **Known limitation:** when the scan step resolves an entry's DOI through Crossref (`scan_raw_refs.resolve_doi_crossref`), it adopts Crossref's year and discards the year written in the manuscript, with no warning. For a reissued book that year can be the digital re-release date rather than the edition cited — e.g. `Cohen, J. (1988)` becomes 2013 via the Routledge eBook DOI `10.4324/9780203771587` — and the resulting mismatch then silently blocks author-year matching for that entry. Check the years in the extracted `.bib` against your draft.
 
 ### 1.1.3
 *   **Fixed** an `IndexError` crash in verification/scan when Crossref returned an empty `title`/`container-title` or empty `date-parts` (e.g., books, datasets) — the run no longer aborts mid-way.
